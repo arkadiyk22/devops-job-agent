@@ -10,6 +10,31 @@ from job_agent.models import Job
 from job_agent.scoring import score_title
 from job_agent.util import normalize_url, strip_html
 
+# When the feed URL is clearly an Israeli job board, set Location so strict
+# Israel filters (title OR location) still keep rows whose titles omit "Israel".
+_IL_JOB_FEED_MARKERS = (
+    "alljobs.co.il",
+    "jobnet.co.il",
+    "drushim.co.il",
+    "yad2.co.il",
+)
+
+
+def _default_location_for_feed(url: str, cfg: Dict[str, Any]) -> str:
+    u = (url or "").lower()
+    markers = list(_IL_JOB_FEED_MARKERS)
+    extra = cfg.get("rss_feeds_israel_host_substrings")
+    if isinstance(extra, list):
+        for x in extra:
+            s = str(x).strip().lower()
+            if s and s not in markers:
+                markers.append(s)
+    if any(m in u for m in markers):
+        return "Israel"
+    if "remote" in u:
+        return "Remote"
+    return ""
+
 
 def fetch_rss_jobs(feed_urls: List[str], cfg: Dict[str, Any]) -> List[Job]:
     out: List[Job] = []
@@ -45,12 +70,13 @@ def fetch_rss_jobs(feed_urls: List[str], cfg: Dict[str, Any]) -> List[Job]:
                     posted = published_raw[:32]
             summary = getattr(e, "summary", None) or getattr(e, "description", None) or ""
             text_blob = strip_html(str(summary))
+            loc = _default_location_for_feed(url, cfg)
             out.append(
                 Job(
                     source=f"rss:{url[:48]}",
                     company=company or (getattr(e, "author", "") or "Various"),
                     title=title,
-                    location="Remote" if "remote" in url.lower() else "",
+                    location=loc,
                     link=link_n,
                     posted=posted or "recent",
                     score=score_title(title, cfg),
