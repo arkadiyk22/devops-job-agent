@@ -11,7 +11,7 @@ Aggregates **DevOps Manager / Director** (and related) roles from several source
 | **RSS** | `rss_feeds` | e.g. We Work Remotely category feed |
 | **SerpAPI** (optional) | `serpapi_features` in `config.json` | Turn on only what you need; needs `SERPAPI_KEY` in `.env` |
 
-**Default:** every `serpapi_features.*` flag is **false** — no SerpAPI (Greenhouse + Lever + RSS only). Legacy configs without `serpapi_features` still use **`use_serpapi`** to toggle all built-in SerpAPI paths together.
+**Default:** `serpapi_features` turns on **Google Jobs** + **Google site / LinkedIn** search (see `ats_google_site_search`), with **Israel** geography in config; **`SERPAPI_KEY`** in `.env` is required for those paths to return rows. **Greenhouse** / **Lever** board lists default to **empty** — add slugs only for employers you care about, or use **RSS** for Israeli job boards. Legacy configs without `serpapi_features` still use **`use_serpapi`** to toggle all built-in SerpAPI paths together.
 
 **SerpAPI free tier** is often **~250 searches/month** shared by every app using that API key. To block all SerpAPI from this process, set **`JOB_AGENT_NO_SERPAPI=1`** in `.env`.
 
@@ -71,25 +71,28 @@ Greenhouse/Lever are **global** APIs: they are **not** geo-scoped. For strict Is
 ## Run
 
 ```bash
-# Safe test: no DB update, no email; optional empty DB to see fresh rows
+# Preview: no jobs.db update, no email (use empty DB to see all fetched links as “new”)
 python run.py --dry-run --skip-contacts --db /tmp/jagent-test.db
 
-# Default: Greenhouse + Lever + RSS only (no SerpAPI)
+# Production (default config: SerpAPI Google Jobs + Google site / LinkedIn IL + Israel filters; needs SERPAPI_KEY)
 python run.py
 
-# Only some sources
-python run.py --sources greenhouse,rss
+# Limit which connectors run (SerpAPI still requires matching serpapi_features.* in config)
+python run.py --sources serpapi,google_site_ats,rss
 
 # Legacy entry (same as run.py)
 python script.py --dry-run --skip-contacts
 ```
 
+There is **no** sample-mail flag; use **`--dry-run`** to inspect stderr tables without sending.
+
 ### Flags
 
 | Flag | Effect |
 |------|--------|
-| `--dry-run` | Build `jobs_<date>.xlsx` under `/tmp`, **no** `jobs.db` updates, **no** email |
+| `--dry-run` | **No** `jobs.db` updates, **no** email; prints per-site fetch stats to stderr |
 | `--skip-contacts` | Skip LinkedIn contact search (even if `serpapi_features.contacts` is true) |
+| `--allow-non-israel-email` | Allow digest email even when rows fail the Israel title/location gate (use sparingly) |
 | `--sources a,b,c` | `serpapi`, `google_site_ats`, `greenhouse`, `lever`, `rss` (SerpAPI CLI names are ignored unless the matching `serpapi_features.*` is true) |
 | `--config path` | Alternate `config.json` |
 | `--db path` | Alternate SQLite file |

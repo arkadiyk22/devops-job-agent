@@ -1,8 +1,8 @@
 {
   "use_serpapi": false,
   "serpapi_features": {
-    "google_jobs": false,
-    "google_site_ats": false,
+    "google_jobs": true,
+    "google_site_ats": true,
     "contacts": false
   },
   "email_from_display_name": "Job Agent",
@@ -122,7 +122,7 @@
   "keep_unknown_posted_age": false,
   "keep_unknown_posted_age_for_source_prefixes": ["google_site_ats:"],
   "ats_google_site_search": {
-    "enabled": false,
+    "enabled": true,
     "prepend_builtin_devops_or_blocks": true,
     "include_builtin_extra_query_templates": true,
     "merge_roles_from_serpapi_template": true,
@@ -160,13 +160,16 @@
     "after_date_buffer_days": 5,
     "omit_after_clause": false,
     "extra_query_templates": [
+      "site:il.linkedin.com/jobs \"DevOps Manager\" Israel{after}",
+      "site:il.linkedin.com/jobs \"DevOps Director\" Israel{after}",
+      "site:il.linkedin.com/jobs \"מנהל DevOps\" Israel{after}",
       "site:linkedin.com/jobs/view \"DevOps Manager\" {geo}{after}",
       "site:linkedin.com/jobs/view \"DevOps Director\" {geo}{after}",
       "site:linkedin.com/jobs/view \"מנהל DevOps\" {geo}{after}",
       "site:il.linkedin.com/jobs \"DevOps Manager\" {geo}{after}",
       "site:apply.workable.com \"Israel\" (\"DevOps Manager\" OR \"DevOps Director\" OR \"Head of DevOps\"){after}"
     ],
-    "max_queries": 320,
+    "max_queries": 48,
     "num": 18,
     "request_delay_seconds": 0.28
   },
@@ -192,11 +195,11 @@
     "מנהל DevOps",
     "מנהלת DevOps"
   ],
-  "greenhouse_boards": ["mongodbinc", "duolingo", "figma"],
-  "lever_sites": ["netlify", "flexport"],
+  "greenhouse_boards": [],
+  "lever_sites": [],
   "rss_feeds": [],
   "rss_feeds_israel_host_substrings": [],
-  "israel_job_discovery_notes": "Israeli boards: add HTTPS RSS URLs under rss_feeds (AllJobs / Jobnet / Drushim category feeds, etc.). Feeds whose URL contains known *.co.il job hosts get Location preset to Israel so strict location_hint still works. LinkedIn has no public job API here — enable SerpAPI: set SERPAPI_KEY in .env, serpapi_features.google_site_ats=true, and ats_google_site_search.enabled=true; templates already include site:il.linkedin.com/jobs and site:linkedin.com/jobs/view with Israel geo tokens. Optionally serpapi_features.google_jobs=true with serpapi_location Israel for Google’s job index.",
+  "israel_job_discovery_notes": "Default sources: SerpAPI Google Jobs (serpapi_location=Israel) + Google site search for il.linkedin.com / LinkedIn + Workable Israel. Requires SERPAPI_KEY in .env. Add rss_feeds (AllJobs/Jobnet/Drushim HTTPS RSS) for Israeli boards; *.co.il feed hosts get Location=Israel in code. No --test-email; use dry-run to preview. Global Greenhouse/Lever boards removed — add only Israel-relevant slugs if you use them.",
   "excel_sheet_names": {
     "top_jobs": "Top Jobs",
     "all_jobs": "All Jobs",

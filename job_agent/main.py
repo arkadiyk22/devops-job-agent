@@ -196,11 +196,6 @@ def run(argv: List[str] | None = None) -> int:
         help="Fetch + build Excel; do not write jobs.db or send email",
     )
     parser.add_argument(
-        "--test-email",
-        action="store_true",
-        help="Send one sample HTML digest to EMAIL_TO (no job fetch, no DB); checks Gmail SMTP config",
-    )
-    parser.add_argument(
         "--skip-contacts",
         action="store_true",
         help="Skip SerpAPI Google search for LinkedIn profiles",
@@ -227,38 +222,6 @@ def run(argv: List[str] | None = None) -> int:
     cfg = load_config(args.config)
     if args.allow_non_israel_email:
         cfg = {**cfg, "digest_email_enforce_location_hint": False}
-
-    if args.test_email:
-        sample = pd.DataFrame(
-            [
-                {
-                    "Job Title": "DevOps Director — sample row (email layout test)",
-                    "Company": "Example Corp",
-                    "Link": "https://example.com/careers/sample",
-                    "Source": "test-email",
-                    "Location": "Remote",
-                    "Score": 99,
-                }
-            ]
-        )
-        send_digest_email(
-            sample,
-            pd.DataFrame(),
-            cfg,
-            network_df=pd.DataFrame(),
-            fetch_stats_df=pd.DataFrame(
-                [
-                    {"Site": "Greenhouse: example-board", "Fetched": 12, "Unique added": 12},
-                    {"Site": "Lever: example", "Fetched": 0, "Unique added": 0},
-                ]
-            ),
-            digest_by_source_df=pd.DataFrame([{"Source": "test-email", "New in this email": 1}]),
-            attach_excel=False,
-            excel_path=None,
-            subject="Job Agent — HTML digest test (sample only)",
-        )
-        print("Sent test digest email (check inbox).")
-        return 0
 
     only = parse_sources_arg(args.sources or None)
 
