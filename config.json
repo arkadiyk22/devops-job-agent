@@ -194,6 +194,7 @@
   "greenhouse_boards": ["mongodbinc", "duolingo", "figma"],
   "lever_sites": ["netlify", "flexport"],
   "rss_feeds": [],
+  "rss_feeds_israel_host_substrings": [],
   "israel_job_discovery_notes": "Israeli boards: add HTTPS RSS URLs under rss_feeds (AllJobs / Jobnet / Drushim category feeds, etc.). Feeds whose URL contains known *.co.il job hosts get Location preset to Israel so strict location_hint still works. LinkedIn has no public job API here — enable SerpAPI: set SERPAPI_KEY in .env, serpapi_features.google_site_ats=true, and ats_google_site_search.enabled=true; templates already include site:il.linkedin.com/jobs and site:linkedin.com/jobs/view with Israel geo tokens. Optionally serpapi_features.google_jobs=true with serpapi_location Israel for Google’s job index.",
   "excel_sheet_names": {
     "top_jobs": "Top Jobs",
