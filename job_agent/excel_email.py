@@ -222,12 +222,20 @@ def _build_digest_html(
         "there is no numeric score column in this email."
         "</p>"
     )
+    cap_fetch = (
+        "Fetched = jobs returned from that site after source-specific title/role filters. "
+        "Unique added = how many job URLs were new to the combined pool when merging (dedupe across sites). "
+        "Location / age filters in config apply after this step."
+    )
+    if cfg.get("location_hint_strict_location_or_title") and cfg.get("filter_jobs_by_location_hint"):
+        cap_fetch += (
+            " **Israel (strict):** a location alias must appear in the job **title or location** line "
+            "(not company name or job description alone), so US-only Greenhouse rows are dropped."
+        )
     fetch_block = _stats_block_html(
         "Sources checked (this run)",
         fetch_stats_df,
-        "Fetched = jobs returned from that site after source-specific title/role filters. "
-        "Unique added = how many job URLs were new to the combined pool when merging (dedupe across sites). "
-        "Location / age filters in config apply after this step.",
+        cap_fetch,
     )
     digest_src_block = _stats_block_html(
         "New jobs in this email (by source)",

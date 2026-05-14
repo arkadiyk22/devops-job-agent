@@ -36,7 +36,7 @@ def load_config(path: Path) -> Dict[str, Any]:
 
 
 def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    """Keep rows whose title, location, or company mentions Israel (or aliases).
+    """Keep rows that look Israel-related per config (aliases + optional strict mode).
 
     Applies to sources listed in ``location_filter_source_prefixes`` (by default
     Greenhouse, Lever, RSS; config also includes ``serpapi_`` and ``google_site_ats:``
@@ -45,10 +45,13 @@ def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[J
     SerpAPI Google Jobs is still scoped by ``serpapi_location`` / ``gl`` in
     ``google_jobs.py``; this filter is an additional text guard on returned rows.
 
-    When ``location_hint_include_job_description`` is true, the first
-    ``location_hint_description_max_chars`` characters of each job's description
-    text (from ``Job.raw["text"]``) are also searched for aliases — useful when
-    Israel / remote-IL appears only in the body, not in the Greenhouse location line.
+    When ``location_hint_strict_location_or_title`` is true, a match must appear in
+    **location or title** (not company alone, and not job description). That avoids
+    US postings that only mention Israel in the body or company boilerplate.
+
+    When ``location_hint_include_job_description`` is true and strict mode is off,
+    the first ``location_hint_description_max_chars`` characters of ``Job.raw["text"]``
+    are also searched.
     """
     if not cfg.get("filter_jobs_by_location_hint", False):
         return jobs
@@ -69,27 +72,37 @@ def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[J
         if t and t not in aliases:
             aliases.append(t)
     out: List[Job] = []
-    include_desc = bool(cfg.get("location_hint_include_job_description", False))
+    strict_loc_title = bool(cfg.get("location_hint_strict_location_or_title", False))
+    include_desc = bool(cfg.get("location_hint_include_job_description", False)) and not strict_loc_title
     desc_cap = int(cfg.get("location_hint_description_max_chars") or 4000)
     if desc_cap < 500:
         desc_cap = 500
     if desc_cap > 50000:
         desc_cap = 50000
+
+    def _has_alias(text: str) -> bool:
+        low = text.lower()
+        return any(a in low for a in aliases)
+
     for j in jobs:
         sl = j.source.lower()
         if not any(sl.startswith(p) for p in prefixes):
             out.append(j)
             continue
-        blob = f"{j.location} {j.title} {j.company}".lower()
-        if any(a in blob for a in aliases):
+        loc = j.location or ""
+        title = j.title or ""
+        company = j.company or ""
+        if strict_loc_title:
+            if _has_alias(f"{loc} {title}"):
+                out.append(j)
+            continue
+        if _has_alias(f"{loc} {title} {company}"):
             out.append(j)
             continue
         if include_desc and isinstance(j.raw, dict):
             txt = str(j.raw.get("text") or "")
-            if txt:
-                blob2 = txt[:desc_cap].lower()
-                if any(a in blob2 for a in aliases):
-                    out.append(j)
+            if txt and _has_alias(txt[:desc_cap]):
+                out.append(j)
     return out
 
 
@@ -253,8 +266,10 @@ def run(argv: List[str] | None = None) -> int:
                 print(fetch_stats_df.to_string(index=False), file=sys.stderr)
             if cfg.get("filter_jobs_by_location_hint", False):
                 print(
-                    "No jobs left after Israel / location_hint filter "
-                    "(title, location, or company must mention location_hint or an alias).",
+                    "No jobs left after Israel / location_hint filter. "
+                    "If location_hint_strict_location_or_title is true, an alias must appear "
+                    "in the job title or location line (not company/description alone). "
+                    "Global US boards often produce zero rows — add Israel-focused boards or SerpAPI IL queries.",
                     file=sys.stderr,
                 )
             else:

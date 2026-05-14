@@ -29,7 +29,8 @@
   },
   "location_hint": "Israel",
   "filter_jobs_by_location_hint": true,
-  "location_hint_include_job_description": true,
+  "location_hint_strict_location_or_title": true,
+  "location_hint_include_job_description": false,
   "location_hint_description_max_chars": 4000,
   "location_hint_aliases": [
     "israel",
