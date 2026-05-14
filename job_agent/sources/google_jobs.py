@@ -20,6 +20,24 @@ def _looks_configured(api_key: str) -> bool:
     return True
 
 
+def _serpapi_google_jobs_params(q: str, api_key: str, cfg: Dict[str, Any]) -> dict:
+    """Build SerpAPI google_jobs params; pin geography when location_hint / serpapi_* are set."""
+    params: dict[str, str] = {"engine": "google_jobs", "q": q, "api_key": api_key}
+    loc = (cfg.get("serpapi_location") or cfg.get("location_hint") or "").strip()
+    if loc:
+        params["location"] = loc
+    gl = (cfg.get("serpapi_gl") or "").strip()
+    if gl:
+        params["gl"] = gl
+    gd = (cfg.get("serpapi_google_domain") or "").strip()
+    if gd:
+        params["google_domain"] = gd
+    hl = (cfg.get("serpapi_hl") or "").strip()
+    if hl:
+        params["hl"] = hl
+    return params
+
+
 def _serpapi_google_jobs_once(params: dict) -> dict:
     return serpapi_request(params)
 
@@ -62,7 +80,7 @@ def fetch_google_jobs(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
     seen: set[str] = set()
 
     for q in queries:
-        params = {"engine": "google_jobs", "q": q, "api_key": api_key}
+        params = _serpapi_google_jobs_params(q, api_key, cfg)
         try:
             data = _serpapi_google_jobs_retry(params)
         except RuntimeError as e:

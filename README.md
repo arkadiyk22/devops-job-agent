@@ -31,6 +31,17 @@ Optional: shared JSON settings (same as before):
 
 Tune targets in **`config.json`**: queries, Greenhouse/Lever slugs, RSS URLs, scoring keywords.
 
+### Israel / geography (SerpAPI + optional text filter)
+
+- **`serpapi_location`** — passed to SerpAPI as `location` (e.g. `Tel Aviv, Israel`; falls back to **`location_hint`** if unset).
+- **`serpapi_gl`** — country code for Google (e.g. `il`).
+- **`serpapi_google_domain`** — e.g. `google.co.il`.
+- **`serpapi_hl`** — interface language (e.g. `en` or `iw`).
+- **`filter_jobs_by_location_hint`** — when `true`, keeps **Greenhouse / Lever / RSS** rows only if **`location_hint`** or any **`location_hint_aliases`** substring appears in title/location/company (US-heavy boards may go to **zero** hits).
+- **`location_filter_source_prefixes`** — which `Job.source` prefixes the text filter applies to (default `greenhouse:`, `lever:`, `rss:`). Use **`[]`** to skip that text filter entirely while keeping SerpAPI geography above.
+
+Greenhouse/Lever are **global** APIs: they are **not** geo-scoped like SerpAPI. For strict Israel-only rows from those sources, use boards/sites that post Israel roles, enable **`filter_jobs_by_location_hint`**, and tune **`location_hint_aliases`**.
+
 ## Run
 
 ```bash

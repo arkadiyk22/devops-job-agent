@@ -31,6 +31,42 @@ def load_config(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def filter_jobs_by_location_hint(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
+    """For global boards (Greenhouse/Lever/RSS), keep rows that mention location_hint.
+
+    SerpAPI Google Jobs rows are not filtered here — geography is applied via SerpAPI
+    ``location`` / ``gl`` / ``google_domain`` in ``google_jobs.py``.
+    """
+    if not cfg.get("filter_jobs_by_location_hint", False):
+        return jobs
+    hint = (cfg.get("location_hint") or "").strip()
+    if not hint:
+        return jobs
+    raw = cfg.get("location_filter_source_prefixes")
+    if raw is None:
+        prefixes = ("greenhouse:", "lever:", "rss:")
+    elif isinstance(raw, list) and len(raw) == 0:
+        return jobs
+    else:
+        prefixes = tuple(str(x).lower() for x in raw)
+    needle = hint.lower()
+    aliases = [needle]
+    for a in cfg.get("location_hint_aliases") or []:
+        t = str(a).strip().lower()
+        if t and t not in aliases:
+            aliases.append(t)
+    out: List[Job] = []
+    for j in jobs:
+        sl = j.source.lower()
+        if not any(sl.startswith(p) for p in prefixes):
+            out.append(j)
+            continue
+        blob = f"{j.location} {j.title} {j.company}".lower()
+        if any(a in blob for a in aliases):
+            out.append(j)
+    return out
+
+
 def parse_sources_arg(raw: str | None) -> Set[str] | None:
     if not raw:
         return None
@@ -97,6 +133,7 @@ def run(argv: List[str] | None = None) -> int:
     conn = db.connect(args.db)
     try:
         jobs = collect_all(cfg, only)
+        jobs = filter_jobs_by_location_hint(jobs, cfg)
         if not jobs:
             print("No jobs fetched from any source.")
             return 0
