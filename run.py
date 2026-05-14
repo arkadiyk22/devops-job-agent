@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entry: python run.py [--dry-run] [--allow-non-israel-email] [--skip-contacts] [--sources ...]"""
+"""CLI entry: python run.py [--dry-run] [--print-queries] [--allow-non-israel-email] [--skip-contacts] [--sources ...]"""
 
 import sys
 

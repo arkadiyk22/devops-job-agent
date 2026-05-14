@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Set, Tuple
 import pandas as pd
 
 from job_agent import db
-from job_agent.contacts import find_contacts
+from job_agent.contacts import _build_contact_queries, find_contacts
 from job_agent.excel_email import save_excel, send_digest_email
 from job_agent.network import match_network_to_jobs, read_connections_csv, resolve_network_csv_path
 from job_agent.filters import annotate_search_fallback_for_blocked_domains, apply_job_filters
@@ -180,6 +180,43 @@ def collect_all_with_stats(cfg: Dict[str, Any], only: Set[str] | None) -> Tuple[
     return jobs, stats
 
 
+def print_all_queries(cfg: Dict[str, Any]) -> None:
+    """Print every Google Jobs + Google web (ATS/LinkedIn) + contact-search query string from config."""
+    gj = build_serpapi_queries(cfg)
+    ats = build_ats_google_site_queries(cfg)
+    print(
+        "SerpAPI feature flags:",
+        f"google_jobs={serpapi_feature_enabled('google_jobs', cfg)}",
+        f"google_site_ats={serpapi_feature_enabled('google_site_ats', cfg)}",
+        f"contacts={serpapi_feature_enabled('contacts', cfg)}",
+    )
+    print()
+    print("=== SerpAPI Google Jobs (engine=google_jobs) — string used as parameter \"q\" ===")
+    print("(Runs only when serpapi_features.google_jobs is true.)\n")
+    if not gj:
+        print("  (none — check serpapi_google_jobs_queries or serpapi_query_template.roles/suffixes.)\n")
+    else:
+        for i, q in enumerate(gj, 1):
+            print(f"  {i:4d}  {q}")
+        print(f"\n  Total: {len(gj)}\n")
+
+    print("=== SerpAPI Google Web (engine=google) — string used as parameter \"q\" ===")
+    print("(Runs only when ats_google_site_search.enabled and serpapi_features.google_site_ats.)\n")
+    if not ats:
+        print("  (none — ATS block disabled, or no queries after templates/sites expansion.)\n")
+    else:
+        for i, q in enumerate(ats, 1):
+            print(f"  {i:4d}  {q}")
+        print(f"\n  Total: {len(ats)} (after max_queries cap)\n")
+
+    print('=== Recruiter radar (contacts) — Google \"q\" patterns (sample: company=Acme, job_title=DevOps Director) ===')
+    print("(Runs when serpapi_features.contacts is true.)\n")
+    cq = _build_contact_queries("Acme", "DevOps Director", cfg)
+    for i, q in enumerate(cq, 1):
+        print(f"  {i:4d}  {q}")
+    print(f"\n  Total: {len(cq)}")
+
+
 def run(argv: List[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     root = project_root()
@@ -217,11 +254,20 @@ def run(argv: List[str] | None = None) -> int:
         action="store_true",
         help="Disable digest_email_enforce_location_hint for this run (digest may include non-Israel rows).",
     )
+    parser.add_argument(
+        "--print-queries",
+        action="store_true",
+        help="Print all SerpAPI Google Jobs + Google web (ATS/LinkedIn) + contact-search query strings, then exit",
+    )
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.allow_non_israel_email:
         cfg = {**cfg, "digest_email_enforce_location_hint": False}
+
+    if args.print_queries:
+        print_all_queries(cfg)
+        return 0
 
     only = parse_sources_arg(args.sources or None)
 

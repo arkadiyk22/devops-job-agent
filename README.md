@@ -90,6 +90,7 @@ There is **no** sample-mail flag; use **`--dry-run`** to inspect stderr tables w
 
 | Flag | Effect |
 |------|--------|
+| `--print-queries` | Print every SerpAPI **Google Jobs** + **Google web** + **contact** query string from config, then exit (no fetch, no DB) |
 | `--dry-run` | **No** `jobs.db` updates, **no** email; prints per-site fetch stats to stderr |
 | `--skip-contacts` | Skip LinkedIn contact search (even if `serpapi_features.contacts` is true) |
 | `--allow-non-israel-email` | Allow digest email even when rows fail the Israel title/location gate (use sparingly) |
