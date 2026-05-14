@@ -6,7 +6,7 @@ import requests
 
 from job_agent.models import Job
 from job_agent.scoring import score_title
-from job_agent.util import normalize_url
+from job_agent.util import normalize_url, strip_html
 
 
 def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
@@ -51,6 +51,9 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
                 loc = locs.get("name", "")
             elif isinstance(locs, list) and locs:
                 loc = str(locs[0].get("name", "") if isinstance(locs[0], dict) else locs[0])
+            updated = str(job.get("updated_at", "") or "").strip()
+            posted = updated if updated else "recent"
+            desc_text = strip_html(str(job.get("content", "") or ""))
             out.append(
                 Job(
                     source=f"greenhouse:{board}",
@@ -58,8 +61,9 @@ def fetch_greenhouse(boards: List[str], cfg: Dict[str, Any]) -> List[Job]:
                     title=title,
                     location=loc,
                     link=link_n,
-                    posted=str(job.get("updated_at", "recent"))[:16],
+                    posted=posted,
                     score=score_title(title, cfg),
+                    raw={"text": desc_text},
                 )
             )
     return out

@@ -13,15 +13,17 @@ class Job:
     link: str
     posted: str = "recent"
     score: int = 0
+    search_fallback: str = ""
     raw: Dict[str, Any] = field(default_factory=dict)
 
     def as_row(self) -> Dict[str, Any]:
         return {
-            "Company": self.company,
             "Job Title": self.title,
-            "Location": self.location,
-            "Posted Date": self.posted,
+            "Company": self.company,
             "Link": self.link,
-            "Score": self.score,
+            "Recommended Search": self.search_fallback,
             "Source": self.source,
+            "Posted Date": self.posted,
+            "Location": self.location,
+            "Score": self.score,
         }

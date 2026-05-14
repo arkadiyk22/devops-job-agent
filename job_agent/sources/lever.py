@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import requests
@@ -63,6 +64,13 @@ def fetch_lever(sites: List[str], cfg: Dict[str, Any]) -> List[Job]:
             else:
                 location = str(loc_raw or "")
             company = site.replace("-", " ").title()
+            created = p.get("createdAt")
+            posted = "recent"
+            if isinstance(created, (int, float)) and created > 0:
+                ts = float(created) / 1000.0 if created > 1e12 else float(created)
+                posted = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            elif isinstance(created, str) and created.strip():
+                posted = created.strip()[:19]
             out.append(
                 Job(
                     source=f"lever:{site}",
@@ -70,8 +78,9 @@ def fetch_lever(sites: List[str], cfg: Dict[str, Any]) -> List[Job]:
                     title=title,
                     location=location,
                     link=link_n,
-                    posted=str(p.get("createdAt", "recent"))[:16],
+                    posted=posted,
                     score=score_title(title, cfg),
+                    raw={"text": (text or "")[:12000]},
                 )
             )
     return out

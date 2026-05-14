@@ -1,35 +1,216 @@
 {
+  "use_serpapi": false,
+  "serpapi_features": {
+    "google_jobs": false,
+    "google_site_ats": false,
+    "contacts": false
+  },
+  "email_from_display_name": "Job Agent",
+  "email_attach_excel": false,
+  "network": {
+    "linkedin_connections_csv": ""
+  },
+  "contact_search": {
+    "top_jobs_for_contacts": 8,
+    "max_contacts_per_job": 4,
+    "max_contacts_total": 32,
+    "organic_results_per_query": 3,
+    "google_num": 10,
+    "google_queries_extra": [
+      "\"{company}\" \"{job_title}\" recruiter site:linkedin.com/in",
+      "\"{company}\" VP engineering site:linkedin.com/in"
+    ]
+  },
   "location_hint": "Israel",
   "filter_jobs_by_location_hint": false,
-  "location_filter_source_prefixes": [],
+  "location_hint_aliases": [
+    "israel",
+    "ישראל",
+    "tel aviv",
+    "תל אביב",
+    "herzliya",
+    "הרצליה",
+    "ramat gan",
+    "רמת גן",
+    "raanana",
+    "רעננה",
+    "jerusalem",
+    "ירושלים",
+    "haifa",
+    "חיפה",
+    "beer sheva",
+    "באר שבע",
+    "netanya",
+    "נתניה",
+    "rehovot",
+    "רחובות",
+    "holon",
+    "חולון",
+    "bnei brak",
+    "פתח תקווה",
+    "modiin",
+    "מודיעין",
+    "givatayim",
+    "גבעתיים",
+    "kfar saba",
+    "כפר סבא",
+    "hod hasharon",
+    "הוד השרון"
+  ],
+  "location_filter_source_prefixes": ["greenhouse:", "lever:", "rss:"],
   "serpapi_google_domain": "google.co.il",
   "serpapi_gl": "il",
   "serpapi_hl": "en",
-  "serpapi_location": "Tel Aviv, Israel",
-  "role_focus": ["DevOps Manager", "DevOps Director", "Director of DevOps", "Head of DevOps", "VP DevOps", "Platform Engineering Manager", "Director of Platform Engineering"],
-  "serpapi_google_jobs_queries": [
-    "DevOps Director",
+  "serpapi_google_jobs_hl_variants": ["en"],
+  "serpapi_location": "Israel",
+  "serpapi_google_jobs_queries": [],
+  "serpapi_query_template": {
+    "roles": [
+      "DevOps Manager",
+      "DevOps Director",
+      "Director of DevOps",
+      "Head of DevOps",
+      "VP DevOps",
+      "Director of Platform Engineering",
+      "Platform Engineering Manager",
+      "SRE Manager",
+      "Infrastructure Manager",
+      "Engineering Manager DevOps",
+      "DevOps Team Lead",
+      "DevOps Lead",
+      "מנהל DevOps",
+      "מנהלת DevOps",
+      "מנהל דבאופס",
+      "מנהלת דבאופס",
+      "ראש צוות DevOps",
+      "מנהל תשתיות ענן",
+      "מנהלת תשתיות ענן",
+      "מנהל פלטפורמה",
+      "מנהלת פלטפורמה",
+      "מנהל תפעול ענן",
+      "מנהל SRE",
+      "מנהלת SRE",
+      "אחראי DevOps",
+      "אחראית DevOps"
+    ],
+    "suffixes": [
+      "Israel",
+      "ישראל",
+      "Tel Aviv Israel",
+      "Herzliya Israel",
+      "Jerusalem Israel",
+      "10+ years experience"
+    ]
+  },
+  "max_posted_age_days": 30,
+  "keep_unknown_posted_age": false,
+  "keep_unknown_posted_age_for_source_prefixes": ["google_site_ats:"],
+  "ats_google_site_search": {
+    "enabled": false,
+    "prepend_builtin_devops_or_blocks": true,
+    "include_builtin_extra_query_templates": true,
+    "merge_roles_from_serpapi_template": true,
+    "search_notes": "When enabled: LinkedIn (site:linkedin.com / il.linkedin.com), ATS hosts, OR blocks in EN+HE. See BUILTIN_DEVOPS_OR_BLOCKS in query_build.py.",
+    "sites": [
+      "comeet.co",
+      "www.comeet.com",
+      "greenhouse.io",
+      "job-boards.greenhouse.io",
+      "myworkdayjobs.com",
+      "lever.co",
+      "apply.workable.com",
+      "smartrecruiters.com",
+      "linkedin.com",
+      "il.linkedin.com"
+    ],
+    "role_phrases": [
+      "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"director of devops\")",
+      "(\"engineering manager devops\" OR \"devops team lead\" OR \"lead devops\")",
+      "(מנהל DevOps OR מנהלת DevOps OR \"מנהל דבאופס\" OR \"ראש צוות DevOps\")"
+    ],
+    "geo_suffixes": [
+      "Israel",
+      "ישראל",
+      "Tel Aviv",
+      "תל אביב",
+      "Herzliya",
+      "Ramat Gan",
+      "Jerusalem",
+      "Haifa",
+      "hybrid",
+      "remote"
+    ],
+    "after_days_ago": 35,
+    "after_date_buffer_days": 5,
+    "omit_after_clause": false,
+    "extra_query_templates": [
+      "site:linkedin.com/jobs/view \"DevOps Manager\" {geo}{after}",
+      "site:linkedin.com/jobs/view \"DevOps Director\" {geo}{after}",
+      "site:linkedin.com/jobs/view \"מנהל DevOps\" {geo}{after}",
+      "site:il.linkedin.com/jobs \"DevOps Manager\" {geo}{after}",
+      "site:apply.workable.com \"Israel\" (\"DevOps Manager\" OR \"DevOps Director\" OR \"Head of DevOps\"){after}"
+    ],
+    "max_queries": 320,
+    "num": 18,
+    "request_delay_seconds": 0.28
+  },
+  "enable_search_fallback_for_blocked_domains": true,
+  "search_fallback_blocked_domains": [
+    "linkedin.com",
+    "lnkd.in",
+    "facebook.com",
+    "fb.com",
+    "twitter.com",
+    "x.com"
+  ],
+  "serpapi_google_jobs_params": {},
+  "role_focus": [
     "DevOps Manager",
+    "DevOps Director",
     "Director of DevOps",
     "Head of DevOps",
-    "VP Engineering Infrastructure",
+    "VP DevOps",
     "Platform Engineering Manager",
+    "Director of Platform Engineering",
     "SRE Manager",
-    "Infrastructure Manager"
+    "מנהל DevOps",
+    "מנהלת DevOps"
   ],
-  "greenhouse_boards": [
-    "mongodbinc",
-    "duolingo",
-    "figma"
-  ],
-  "lever_sites": [
-    "netlify",
-    "flexport"
-  ],
+  "greenhouse_boards": ["mongodbinc", "duolingo", "figma"],
+  "lever_sites": ["netlify", "flexport"],
   "rss_feeds": [],
+  "excel_sheet_names": {
+    "top_jobs": "Top Jobs",
+    "all_jobs": "All Jobs",
+    "contacts": "Contacts"
+  },
   "scoring": {
-    "keywords": ["DevOps", "Platform", "SRE", "Infrastructure", "Cloud", "CI/CD", "Kubernetes", "Terraform"],
-    "seniority": ["Manager", "Director", "Head", "Lead", "VP"],
+    "keywords": [
+      "DevOps",
+      "Platform",
+      "SRE",
+      "Infrastructure",
+      "Cloud",
+      "CI/CD",
+      "Kubernetes",
+      "Terraform",
+      "דבאופס",
+      "תשתיות",
+      "ענן"
+    ],
+    "seniority": [
+      "Manager",
+      "Director",
+      "Head",
+      "Lead",
+      "VP",
+      "מנהל",
+      "מנהלת",
+      "ראש",
+      "אחראי",
+      "אחראית",
+      "מוביל"
+    ],
     "director_head_bonus": 2
   }
 }

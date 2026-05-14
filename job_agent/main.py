@@ -11,11 +11,15 @@ import pandas as pd
 
 from job_agent import db
 from job_agent.contacts import find_contacts
-from job_agent.excel_email import save_excel, send_email_with_attachment
+from job_agent.excel_email import save_excel, send_digest_email
+from job_agent.network import match_network_to_jobs, read_connections_csv, resolve_network_csv_path
+from job_agent.filters import annotate_search_fallback_for_blocked_domains, apply_job_filters
 from job_agent.models import Job
 from job_agent.outreach import outreach_message
-from job_agent.settings import get_setting
+from job_agent.query_build import build_ats_google_site_queries, build_serpapi_queries
+from job_agent.settings import get_setting, serpapi_feature_enabled
 from job_agent.sources.google_jobs import fetch_google_jobs
+from job_agent.sources.google_site_ats import fetch_google_site_ats
 from job_agent.sources.greenhouse import fetch_greenhouse
 from job_agent.sources.lever import fetch_lever
 from job_agent.sources.rss_feeds import fetch_rss_jobs
@@ -73,6 +77,15 @@ def parse_sources_arg(raw: str | None) -> Set[str] | None:
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
+def _strip_disabled_serpapi_sources(cfg: Dict[str, Any], only: Set[str]) -> Set[str] | None:
+    out = set(only)
+    if not serpapi_feature_enabled("google_jobs", cfg):
+        out -= {"serpapi", "google_jobs"}
+    if not serpapi_feature_enabled("google_site_ats", cfg):
+        out -= {"google_site_ats", "ats_google"}
+    return out if out else None
+
+
 def collect_all(cfg: Dict[str, Any], only: Set[str] | None) -> List[Job]:
     jobs: List[Job] = []
     seen: Set[str] = set()
@@ -83,8 +96,18 @@ def collect_all(cfg: Dict[str, Any], only: Set[str] | None) -> List[Job]:
                 seen.add(j.link)
                 jobs.append(j)
 
-    if only is None or "serpapi" in only or "google_jobs" in only:
-        add_many(fetch_google_jobs(cfg.get("serpapi_google_jobs_queries") or [], cfg))
+    if only:
+        only = _strip_disabled_serpapi_sources(cfg, only)
+        if not only:
+            only = None
+
+    if serpapi_feature_enabled("google_jobs", cfg) and (only is None or "serpapi" in only or "google_jobs" in only):
+        add_many(fetch_google_jobs(build_serpapi_queries(cfg), cfg))
+
+    if serpapi_feature_enabled("google_site_ats", cfg) and (
+        only is None or "google_site_ats" in only or "ats_google" in only
+    ):
+        add_many(fetch_google_site_ats(build_ats_google_site_queries(cfg), cfg))
 
     if only is None or "greenhouse" in only:
         add_many(fetch_greenhouse(cfg.get("greenhouse_boards") or [], cfg))
@@ -119,10 +142,15 @@ def run(argv: List[str] | None = None) -> int:
         help="Skip SerpAPI Google search for LinkedIn profiles",
     )
     parser.add_argument(
+        "--skip-network",
+        action="store_true",
+        help="Skip matching jobs to your LinkedIn Connections CSV (see config.network)",
+    )
+    parser.add_argument(
         "--sources",
         type=str,
         default="",
-        help="Comma list: serpapi,greenhouse,lever,rss (default: all)",
+        help="Comma list: serpapi,google_site_ats,greenhouse,lever,rss (SerpAPI requires matching serpapi_features.* flags)",
     )
     parser.add_argument("--db", type=Path, default=root / "jobs.db", help="SQLite path")
 
@@ -137,6 +165,11 @@ def run(argv: List[str] | None = None) -> int:
         if not jobs:
             print("No jobs fetched from any source.")
             return 0
+        jobs = apply_job_filters(jobs, cfg)
+        annotate_search_fallback_for_blocked_domains(jobs, cfg)
+        if not jobs:
+            print("No jobs after age/closed posting filters.")
+            return 0
 
         existing = db.existing_links(conn)
         new_jobs = [j for j in jobs if j.link not in existing]
@@ -147,32 +180,74 @@ def run(argv: List[str] | None = None) -> int:
         rows = [j.as_row() for j in new_jobs]
         df = pd.DataFrame(rows)
 
-        top_jobs = df.sort_values("Score", ascending=False).head(5)
+        top_block = cfg.get("contact_search")
+        top_block = top_block if isinstance(top_block, dict) else {}
+        top_n = int(top_block.get("top_jobs_for_contacts") or 8)
+        max_contacts_total = int(top_block.get("max_contacts_total") or 40)
+
+        sorted_jobs = sorted(new_jobs, key=lambda j: (-j.score, j.title))[: max(1, top_n)]
         contacts: List[dict] = []
         if not args.skip_contacts:
-            if get_setting("SERPAPI_KEY", "GOOGLE_JOBS_API_KEY"):
-                for _, row in top_jobs.iterrows():
-                    contacts.extend(find_contacts(str(row["Company"]), str(row["Job Title"])))
+            if serpapi_feature_enabled("contacts", cfg) and get_setting("SERPAPI_KEY", "GOOGLE_JOBS_API_KEY"):
+                for j in sorted_jobs:
+                    contacts.extend(find_contacts(j.company, j.title, j.link, cfg))
+                contacts = contacts[: max_contacts_total]
+            elif not serpapi_feature_enabled("contacts", cfg):
+                print(
+                    "Skipping contacts: SerpAPI contacts off (set serpapi_features.contacts or legacy use_serpapi).",
+                    file=sys.stderr,
+                )
             else:
                 print("Skipping contacts: no SERPAPI_KEY", file=sys.stderr)
 
         contacts_df = pd.DataFrame(contacts)
         if not contacts_df.empty:
             contacts_df["Message"] = contacts_df.apply(
-                lambda r: outreach_message(str(r["Company"]), str(r["Role Hint"])),
+                lambda r: outreach_message(
+                    str(r["Company"]),
+                    str(r["Role Hint"]),
+                    str(r.get("Job Link", "")),
+                ),
                 axis=1,
             )
 
+        network_df = pd.DataFrame()
+        net_path = resolve_network_csv_path(root, cfg)
+        if not args.skip_network and net_path is not None:
+            if net_path.is_file():
+                conns = read_connections_csv(net_path)
+                net_rows = match_network_to_jobs(new_jobs, conns)
+                network_df = pd.DataFrame(net_rows)
+                print(
+                    f"Network: loaded {len(conns)} connections from {net_path.name}; "
+                    f"{len(net_rows)} match rows for this digest."
+                )
+            else:
+                print(f"Network: configured CSV not found: {net_path}", file=sys.stderr)
+
         out_dir = root if not args.dry_run else Path("/tmp")
-        xlsx = save_excel(df, contacts_df if not contacts_df.empty else pd.DataFrame(), out_dir)
-        print(f"Wrote {xlsx} ({len(new_jobs)} new jobs).")
+        attach_excel = bool(cfg.get("email_attach_excel", False))
+        contacts_for_out = contacts_df if not contacts_df.empty else pd.DataFrame()
+        xlsx_path = None
+        if attach_excel:
+            xlsx_path = save_excel(df, contacts_for_out, out_dir, cfg, network_df=network_df)
+            print(f"Wrote {xlsx_path} ({len(new_jobs)} new jobs).")
+        else:
+            print(f"Prepared digest for {len(new_jobs)} new jobs (HTML email body; no Excel).")
 
         if args.dry_run:
             print("Dry-run: not updating jobs.db or sending email.")
             return 0
 
         db.insert_links(conn, [j.link for j in new_jobs])
-        send_email_with_attachment(xlsx)
+        send_digest_email(
+            df,
+            contacts_for_out,
+            cfg,
+            network_df=network_df,
+            attach_excel=attach_excel,
+            excel_path=xlsx_path,
+        )
         print("Sent digest email.")
         return 0
     finally:
