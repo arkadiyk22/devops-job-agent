@@ -16,6 +16,7 @@ from job_agent.settings import get_setting
 _EMAIL_JOB_COLUMNS: Sequence[str] = (
     "Job Title",
     "Company",
+    "Network",
     "Link",
     "Source",
     "Location",
@@ -24,6 +25,7 @@ _EMAIL_JOB_COLUMNS: Sequence[str] = (
 _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Job Title": "Job title",
     "Company": "Company",
+    "Network": "Your connections at this company",
     "Link": "Job link / URL",
     "Source": "Source",
     "Location": "Location",
@@ -82,6 +84,8 @@ def _df_to_html_table(
                 cells.append(
                     f'<td style="word-break:break-all;"><a href="{esc(s, quote=True)}">{esc(s)}</a></td>'
                 )
+            elif c == "Network" and s:
+                cells.append(f'<td style="font-size:13px;">{esc(s)}</td>')
             else:
                 cells.append(f"<td>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
@@ -211,22 +215,35 @@ def _build_digest_html(
     cfg: Dict[str, Any],
     fetch_stats_df: pd.DataFrame,
     digest_by_source_df: pd.DataFrame,
+    *,
+    digest_note: str = "",
 ) -> str:
     # Keep canonical column names (Link, etc.); excel_column_labels is for Excel sheets
     # and for <th> text here only — renaming the frame would drop the Link column.
     headers = _jobs_email_headers(cfg)
     intro = (
         "<p style=\"font-family:sans-serif;font-size:14px;\">"
-        "New DevOps leadership roles (aggregated from configured sources). "
-        "Jobs are listed in <strong>relevance order</strong> (title match to your scoring rules in config); "
-        "there is no numeric score column in this email."
+        "DevOps leadership roles (aggregated from configured sources). "
+        "Jobs are listed in <strong>relevance order</strong> (title match to your scoring rules in config). "
+        "<strong>Your connections at this company</strong> = LinkedIn «People you can reach out to» "
+        "(1st-degree at that employer), or matches from your Connections.csv export if configured. "
+        "Empty if LinkedIn shows no section, scrape failed, or you have not exported Connections.csv."
         "</p>"
     )
+    if digest_note.strip():
+        intro += (
+            f"<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">"
+            f"{html.escape(digest_note.strip())}</p>"
+        )
+    only_new = bool(cfg.get("digest_email_only_new", False))
     cap_fetch = (
-        "Fetched = jobs returned from that site after source-specific title/role filters. "
-        "Unique added = how many job URLs were new to the combined pool when merging (dedupe across sites). "
-        "Location / age filters in config apply after this step."
+        "Fetched = jobs returned from that site after source-specific title/role filters (before Israel location filter). "
+        "Unique added = how many job URLs were new to this run's combined list (dedupe across sites in one run). "
     )
+    if only_new:
+        cap_fetch += "The jobs table lists only URLs not sent in a previous digest."
+    else:
+        cap_fetch += "The jobs table lists all stored matches from your search (repeat listings included each digest)."
     if cfg.get("location_hint_strict_location_or_title") and cfg.get("filter_jobs_by_location_hint"):
         cap_fetch += (
             " **Israel (strict):** a location alias must appear in the job **title or location** line "
@@ -237,17 +254,19 @@ def _build_digest_html(
         fetch_stats_df,
         cap_fetch,
     )
+    jobs_heading = "New jobs" if only_new else "Jobs in this digest"
+    src_heading = "New jobs in this email (by source)" if only_new else "Jobs in this digest (by source)"
     digest_src_block = _stats_block_html(
-        "New jobs in this email (by source)",
+        src_heading,
         digest_by_source_df,
-        "Source is the internal job id (e.g. greenhouse:duolingo). Counts match the New jobs table below.",
+        "Source is the internal job id (e.g. greenhouse:duolingo). Counts match the jobs table below.",
     )
     jobs_table = _df_to_html_table(jobs_df, _EMAIL_JOB_COLUMNS, headers)
     network_block = _network_html_table(network_df)
     contacts_block = _contacts_html_table(contacts_df)
     return (
         "<html><body>"
-        f"{intro}{fetch_block}{digest_src_block}<h2 style=\"font-family:sans-serif;\">New jobs</h2>{jobs_table}"
+        f"{intro}{fetch_block}{digest_src_block}<h2 style=\"font-family:sans-serif;\">{html.escape(jobs_heading)}</h2>{jobs_table}"
         f"{network_block}{contacts_block}"
         "</body></html>"
     )
@@ -259,13 +278,16 @@ def _build_digest_plain(
     network_df: pd.DataFrame,
     fetch_stats_df: pd.DataFrame,
     digest_by_source_df: pd.DataFrame,
+    cfg: Dict[str, Any] | None = None,
 ) -> str:
     lines: List[str] = [
         "DevOps leadership digest",
         "",
     ]
     lines += _stats_block_plain("Sources checked (this run):", fetch_stats_df)
-    lines += _stats_block_plain("New jobs in this email (by source):", digest_by_source_df)
+    only_new = bool((cfg or {}).get("digest_email_only_new", False))
+    src_heading = "New jobs in this email (by source):" if only_new else "Jobs in this digest (by source):"
+    lines += _stats_block_plain(src_heading, digest_by_source_df)
     lines += [
         "Jobs (relevance order — see config scoring; no score column in this mail):",
         "",
@@ -326,6 +348,7 @@ def send_digest_email(
     network_df: Optional[pd.DataFrame] = None,
     fetch_stats_df: Optional[pd.DataFrame] = None,
     digest_by_source_df: Optional[pd.DataFrame] = None,
+    digest_note: str = "",
     attach_excel: bool = False,
     excel_path: Optional[Path] = None,
     subject: Optional[str] = None,
@@ -354,8 +377,10 @@ def send_digest_email(
     if not display:
         display = "Job Agent"
 
-    plain = _build_digest_plain(jobs_df, contacts_df, net, fstats, dsrc)
-    html_body = _build_digest_html(jobs_df, contacts_df, net, cfg, fstats, dsrc)
+    plain = _build_digest_plain(jobs_df, contacts_df, net, fstats, dsrc, cfg)
+    if digest_note.strip():
+        plain = f"{digest_note.strip()}\n\n{plain}"
+    html_body = _build_digest_html(jobs_df, contacts_df, net, cfg, fstats, dsrc, digest_note=digest_note)
 
     msg = EmailMessage()
     msg["Subject"] = (subject or "").strip() or "DevOps Manager/Director roles — digest"

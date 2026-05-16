@@ -124,9 +124,15 @@ def fetch_google_jobs(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
     seen: set[str] = set()
 
     hl_variants = _google_jobs_hl_variants(cfg)
+    log_q = bool(cfg.get("serpapi_log_each_query", False))
 
     for q in queries:
         for hl_v in hl_variants:
+            if log_q:
+                print(
+                    f"SerpAPI Google Jobs: request q={q!r} hl={hl_v!r}",
+                    file=sys.stderr,
+                )
             params = _serpapi_google_jobs_params(q, api_key, cfg, hl_override=hl_v)
             try:
                 data = _serpapi_google_jobs_retry(params)

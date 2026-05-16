@@ -1,0 +1,72 @@
+{
+  "_comment": "Personal browser-first config (no SerpAPI). Copy: cp config.browser.example.json config.json",
+  "search_version": 2,
+  "search_mode": "browser",
+  "browser": {
+    "user_data_dir": "~/.job-agent/browser",
+    "headless": true,
+    "slow_mo_ms": 0,
+    "locale": "he-IL"
+  },
+  "linkedin": {
+    "enabled": true,
+    "jobs_search": {
+      "keywords": "devops manager OR devops director OR head of devops OR vp devops",
+      "location": "Israel",
+      "geo_id": "",
+      "f_TPR": "",
+      "max_pages": 4,
+      "scroll_pause_seconds": 1.5
+    }
+  },
+  "serpapi_features": {
+    "google_jobs": false,
+    "google_site_ats": false,
+    "contacts": false
+  },
+  "use_serpapi": false,
+  "rss_feeds": [],
+  "greenhouse_boards": ["nice", "taboola"],
+  "lever_sites": [],
+  "location_hint": "Israel",
+  "filter_jobs_by_location_hint": true,
+  "location_filter_mode": "israel_or_il_signals",
+  "location_hint_aliases": [
+    "israel",
+    "ישראל",
+    "tel aviv",
+    "תל אביב",
+    "herzliya",
+    "הרצליה",
+    "ramat gan",
+    "hybrid",
+    "remote"
+  ],
+  "location_hint_strict_location_or_title": false,
+  "location_filter_source_prefixes": [
+    "linkedin_browser",
+    "greenhouse:",
+    "lever:",
+    "rss:"
+  ],
+  "digest_email_enforce_location_hint": true,
+  "max_posted_age_days": 30,
+  "keep_unknown_posted_age": true,
+  "role_focus": [
+    "DevOps Manager",
+    "DevOps Director",
+    "Head of DevOps",
+    "VP DevOps",
+    "מנהל DevOps"
+  ],
+  "scoring": {
+    "keywords": ["DevOps", "Platform", "SRE", "Infrastructure", "Cloud", "דבאופס", "ענן"],
+    "seniority": ["Manager", "Director", "Head", "VP", "מנהל", "מנהלת"],
+    "director_head_bonus": 2
+  },
+  "email_attach_excel": false,
+  "network": {
+    "linkedin_connections_csv": "",
+    "max_connections_per_job_in_column": 8
+  }
+}

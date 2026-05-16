@@ -167,8 +167,15 @@ def fetch_google_site_ats(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
 
     out: List[Job] = []
     seen: set[str] = set()
+    log_q = bool(cfg.get("serpapi_log_each_query", False))
+    nq = len(queries)
 
     for i, q in enumerate(queries):
+        if log_q:
+            print(
+                f"SerpAPI Google site:ATS: request {i + 1}/{nq} q={q!r}",
+                file=sys.stderr,
+            )
         params = _google_web_params(q, api_key, cfg, num)
         try:
             data = _serpapi_google_web_retry(params)
@@ -190,7 +197,14 @@ def fetch_google_site_ats(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
             raise
 
         label = _site_label_from_query(q)
-        for row in data.get("organic_results") or []:
+        organic = data.get("organic_results") or []
+        if not organic and log_q:
+            print(
+                f"SerpAPI Google site:ATS: empty organic_results for query {q!r} — skipping.",
+                file=sys.stderr,
+            )
+        n_jobs_before = len(out)
+        for row in organic:
             if not isinstance(row, dict):
                 continue
             link = (row.get("link") or "").strip()
@@ -219,6 +233,11 @@ def fetch_google_site_ats(queries: List[str], cfg: Dict[str, Any]) -> List[Job]:
                     score=score_title(title, cfg),
                     raw=raw,
                 )
+            )
+        if log_q and len(out) == n_jobs_before and organic:
+            print(
+                f"SerpAPI Google site:ATS: no job URLs matched filters for query {q!r} — skipping.",
+                file=sys.stderr,
             )
 
         if delay > 0 and i + 1 < len(queries):

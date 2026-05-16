@@ -247,40 +247,6 @@ def _expand_extra_query_templates(
                 out.append(q)
 
 
-def build_google_browser_queries(cfg: Dict[str, Any]) -> List[str]:
-    """Queries for logged-in Google Web search (no SerpAPI)."""
-    block = cfg.get("google_web_browser")
-    block = block if isinstance(block, dict) else {}
-    if not block.get("enabled", True):
-        return []
-    explicit = block.get("queries")
-    if isinstance(explicit, list) and explicit:
-        return _finalize_query_list([str(q).strip() for q in explicit if str(q).strip()])
-
-    ats = cfg.get("ats_google_site_search")
-    if isinstance(ats, dict) and ats.get("enabled", False):
-        built = build_ats_google_site_queries(cfg)
-        cap = int(block.get("max_queries_per_run") or 0)
-        if cap > 0:
-            return built[:cap]
-        return built
-
-    # Compact defaults when ATS block is off
-    roles = (
-        '("devops manager" OR "devops director" OR "head of devops" OR "vp devops" OR "מנהל devops")'
-    )
-    after_days = int(block.get("after_days_ago") or 40)
-    after = f" after:{(date.today() - timedelta(days=after_days)).isoformat()}"
-    return _finalize_query_list(
-        [
-            f"site:il.linkedin.com/jobs {roles} Israel{after}",
-            f'site:linkedin.com/jobs/view {roles} Israel{after}',
-            f"site:job-boards.greenhouse.io Israel {roles}{after}",
-            f'site:apply.workable.com "Israel" {roles}{after}',
-        ]
-    )
-
-
 def build_ats_google_site_queries(cfg: Dict[str, Any]) -> List[str]:
     """Build ``site:<ats-host> …`` queries for SerpAPI ``engine=google`` (organic results).
 

@@ -1,0 +1,88 @@
+{
+  "_comment": "Draft v2 config — NOT used until search_version is 2 and main.py is wired. Copy ideas into config.json when ready.",
+  "search_version": 2,
+  "search_profile": "israel_devops_leadership",
+  "serpapi_features": {
+    "google_jobs": true,
+    "google_site_ats": true,
+    "contacts": false
+  },
+  "serpapi_max_calls_per_run": 5,
+  "serpapi_google_domain": "google.co.il",
+  "serpapi_gl": "il",
+  "serpapi_hl": "he",
+  "serpapi_location": "Israel",
+  "serpapi_log_each_query": true,
+  "search_v2": {
+    "google_jobs": {
+      "enabled": true,
+      "queries": [
+        "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"vp devops\") israel",
+        "(\"מנהל devops\" OR \"מנהלת devops\" OR \"ראש צוות devops\") israel"
+      ],
+      "hl_variants": ["he"]
+    },
+    "google_web": {
+      "enabled": true,
+      "queries": [
+        "site:il.linkedin.com/jobs (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") israel",
+        "site:apply.workable.com israel (\"devops manager\" OR \"devops director\" OR \"head of devops\")"
+      ],
+      "num": 15,
+      "request_delay_seconds": 0.35
+    },
+    "roles_en": [
+      "devops manager",
+      "devops director",
+      "head of devops",
+      "director of devops",
+      "vp devops",
+      "platform engineering manager",
+      "sre manager"
+    ],
+    "roles_he": [
+      "מנהל devops",
+      "מנהלת devops",
+      "מנהל דבאופס"
+    ],
+    "exclude_role_patterns": [
+      "team lead",
+      "devops lead",
+      "lead devops"
+    ]
+  },
+  "rss_feeds": [],
+  "rss_feeds_israel_host_substrings": [".co.il", "alljobs", "drushim", "jobnet"],
+  "greenhouse_boards": [],
+  "lever_sites": [],
+  "location_hint": "Israel",
+  "filter_jobs_by_location_hint": true,
+  "location_filter_mode": "israel_or_il_signals",
+  "location_hint_aliases": [
+    "israel",
+    "ישראל",
+    "tel aviv",
+    "תל אביב",
+    "herzliya",
+    "הרצליה",
+    "ramat gan",
+    "רמת גן",
+    "hybrid",
+    "remote israel"
+  ],
+  "location_hint_strict_location_or_title": false,
+  "digest_email_enforce_location_hint": true,
+  "max_posted_age_days": 30,
+  "role_focus": [
+    "DevOps Manager",
+    "DevOps Director",
+    "Head of DevOps",
+    "VP DevOps",
+    "מנהל DevOps"
+  ],
+  "scoring": {
+    "keywords": ["DevOps", "Platform", "SRE", "Infrastructure", "Cloud", "דבאופס", "ענן"],
+    "seniority": ["Manager", "Director", "Head", "VP", "מנהל", "מנהלת"],
+    "director_head_bonus": 2
+  }
+}

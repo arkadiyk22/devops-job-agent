@@ -8,6 +8,7 @@ jobs_*.xlsx
 *.db
 *.db-journal
 .DS_Store
+.job-agent/
 
 # LinkedIn connections export (PII) — path from config.network.linkedin_connections_csv
 network_export/*.csv

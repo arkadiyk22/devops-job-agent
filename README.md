@@ -2,6 +2,26 @@
 
 Aggregates **DevOps Manager / Director** (and related) roles from several sources, dedupes against SQLite, writes an **Excel** digest, and optionally emails it via **Gmail SMTP**.
 
+## Job search v2 — browser login (no SerpAPI)
+
+For **personal use**: LinkedIn Jobs with **your** session (Playwright), like WhatsApp Web — login once, reuse profile.
+
+```bash
+cp config.browser.example.json config.json
+pip install playwright && playwright install chromium
+python3 run.py --linkedin-login          # browser window; log in; press Enter
+python3 run.py --print-queries           # preview LinkedIn Jobs URL
+python3 run.py                           # fetch → filter → digest
+```
+
+| Resource | Purpose |
+|----------|---------|
+| [`config.browser.example.json`](config.browser.example.json) | Recommended personal config (`search_mode: browser`) |
+| [`docs/job-search-v2.md`](docs/job-search-v2.md) | Architecture and roadmap |
+| [`legacy/`](legacy/) | Old SerpAPI-heavy v1 snapshot |
+
+Default root `config.json` may still be **v1/SerpAPI** until you copy the browser example.
+
 ## Sources (pluggable)
 
 | Source | Config key | Notes |

@@ -1,0 +1,188 @@
+{
+  "use_serpapi": false,
+  "serpapi_features": {
+    "google_jobs": true,
+    "google_site_ats": true,
+    "contacts": false
+  },
+  "email_from_display_name": "Job Agent",
+  "email_attach_excel": false,
+  "email_table_headers": {
+    "Link": "Job link / URL"
+  },
+  "excel_column_labels": {
+    "Link": "Job link / URL"
+  },
+  "network": {
+    "linkedin_connections_csv": ""
+  },
+  "contact_search": {
+    "top_jobs_for_contacts": 8,
+    "max_contacts_per_job": 4,
+    "max_contacts_total": 32,
+    "organic_results_per_query": 3,
+    "google_num": 10,
+    "google_queries_extra": [
+      "\"{company}\" \"{job_title}\" recruiter site:linkedin.com/in",
+      "\"{company}\" VP engineering site:linkedin.com/in"
+    ]
+  },
+  "location_hint": "Israel",
+  "filter_jobs_by_location_hint": true,
+  "digest_email_enforce_location_hint": true,
+  "location_hint_strict_location_or_title": true,
+  "location_hint_include_job_description": false,
+  "location_hint_description_max_chars": 4000,
+  "location_hint_aliases": [
+    "israel",
+    "ישראל"
+  ],
+  "location_filter_source_prefixes": [
+    "greenhouse:",
+    "lever:",
+    "rss:",
+    "serpapi_",
+    "google_site_ats:"
+  ],
+  "serpapi_google_domain": "google.co.il",
+  "serpapi_gl": "il",
+  "serpapi_hl": "he",
+  "serpapi_log_each_query": true,
+  "serpapi_google_jobs_hl_variants": ["he", "en"],
+  "serpapi_location": "Israel",
+  "serpapi_google_jobs_combine_roles_or": true,
+  "serpapi_google_jobs_combined_query_suffix": "Israel",
+  "serpapi_google_jobs_queries": [],
+  "serpapi_query_template": {
+    "roles": [
+      "DevOps Manager",
+      "DevOps Director",
+      "Director of DevOps",
+      "Head of DevOps",
+      "VP DevOps",
+      "Director of Platform Engineering",
+      "Platform Engineering Manager",
+      "SRE Manager",
+      "Infrastructure Manager",
+      "Engineering Manager DevOps",
+      "מנהל DevOps",
+      "מנהלת DevOps",
+      "מנהל דבאופס",
+      "מנהלת דבאופס",
+      "מנהל תשתיות ענן",
+      "מנהלת תשתיות ענן",
+      "מנהל פלטפורמה",
+      "מנהלת פלטפורמה",
+      "מנהל תפעול ענן",
+      "מנהל SRE",
+      "מנהלת SRE",
+      "אחראי DevOps",
+      "אחראית DevOps"
+    ],
+    "suffixes": []
+  },
+  "max_posted_age_days": 30,
+  "keep_unknown_posted_age": false,
+  "keep_unknown_posted_age_for_source_prefixes": ["google_site_ats:"],
+  "ats_google_site_search": {
+    "enabled": true,
+    "prepend_builtin_devops_or_blocks": true,
+    "include_builtin_extra_query_templates": true,
+    "merge_roles_from_serpapi_template": true,
+    "search_notes": "When enabled: LinkedIn (site:linkedin.com / il.linkedin.com), ATS hosts, OR blocks in EN+HE. See BUILTIN_DEVOPS_OR_BLOCKS in query_build.py.",
+    "sites": [
+      "comeet.co",
+      "www.comeet.com",
+      "greenhouse.io",
+      "job-boards.greenhouse.io",
+      "myworkdayjobs.com",
+      "lever.co",
+      "apply.workable.com",
+      "smartrecruiters.com",
+      "linkedin.com",
+      "il.linkedin.com"
+    ],
+    "role_phrases": [
+      "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"director of devops\" OR \"vp devops\")",
+      "(\"engineering manager devops\")",
+      "(מנהל devops OR מנהלת devops OR \"מנהל דבאופס\")"
+    ],
+    "geo_suffixes": [
+      "Israel"
+    ],
+    "geo_suffixes_israel_only": true,
+    "combine_role_phrases_or": true,
+    "after_days_ago": 35,
+    "after_date_buffer_days": 5,
+    "omit_after_clause": false,
+    "extra_query_templates": [
+      "site:il.linkedin.com/jobs (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
+      "site:linkedin.com/jobs/view (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
+      "site:apply.workable.com \"Israel\" (\"devops manager\" OR \"devops director\" OR \"head of devops\"){after}"
+    ],
+    "max_queries": 48,
+    "num": 18,
+    "request_delay_seconds": 0.28
+  },
+  "enable_search_fallback_for_blocked_domains": true,
+  "search_fallback_blocked_domains": [
+    "linkedin.com",
+    "lnkd.in",
+    "facebook.com",
+    "fb.com",
+    "twitter.com",
+    "x.com"
+  ],
+  "serpapi_google_jobs_params": {},
+  "role_focus": [
+    "DevOps Manager",
+    "DevOps Director",
+    "Director of DevOps",
+    "Head of DevOps",
+    "VP DevOps",
+    "Platform Engineering Manager",
+    "Director of Platform Engineering",
+    "SRE Manager",
+    "מנהל DevOps",
+    "מנהלת DevOps"
+  ],
+  "greenhouse_boards": [],
+  "lever_sites": [],
+  "rss_feeds": [],
+  "rss_feeds_israel_host_substrings": [],
+  "israel_job_discovery_notes": "serpapi_log_each_query controls stderr printing only (each q before request); false does NOT disable SerpAPI or reduce job results—same fetches, quieter logs. Use --log-serpapi-queries for one run. Results depend on SERPAPI_KEY, quota, and sources—not this flag.",
+  "excel_sheet_names": {
+    "top_jobs": "Top Jobs",
+    "all_jobs": "All Jobs",
+    "contacts": "Contacts"
+  },
+  "scoring": {
+    "keywords": [
+      "DevOps",
+      "Platform",
+      "SRE",
+      "Infrastructure",
+      "Cloud",
+      "CI/CD",
+      "Kubernetes",
+      "Terraform",
+      "דבאופס",
+      "תשתיות",
+      "ענן"
+    ],
+    "seniority": [
+      "Manager",
+      "Director",
+      "Head",
+      "Lead",
+      "VP",
+      "מנהל",
+      "מנהלת",
+      "ראש",
+      "אחראי",
+      "אחראית",
+      "מוביל"
+    ],
+    "director_head_bonus": 2
+  }
+}

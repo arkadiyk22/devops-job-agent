@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Job agent: every 30 minutes while the Mac is awake.
+  - Each tick: fetch jobs (no email)
+  - Once/day ~09:30–14:59: morning digest email
+  - Once/day from 15:00: afternoon digest email
+
+  Replace /Users/arkadiykats/devops-job-agent with your repo path.
+
+  Install:
+    cp extras/com.job-agent.two-slot-interval.example.plist ~/Library/LaunchAgents/com.job-agent.two-slot-interval.plist
+    launchctl load ~/Library/LaunchAgents/com.job-agent.two-slot-interval.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.job-agent.two-slot-interval</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/arkadiykats/devops-job-agent</string>
+  <key>StandardOutPath</key>
+  <string>/Users/arkadiykats/.job-agent/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/arkadiykats/.job-agent/logs/launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/arkadiykats/devops-job-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>/Users/arkadiykats</string>
+    <key>TZ</key>
+    <string>Asia/Jerusalem</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/arkadiykats/devops-job-agent/extras/job-agent-interval-tick.sh</string>
+  </array>
+</dict>
+</plist>
