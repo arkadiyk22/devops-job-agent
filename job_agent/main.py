@@ -282,6 +282,13 @@ def _send_email_for_jobs(
     else:
         df["Network"] = ""
 
+    if table_action != "restore":
+        from job_agent.cv_fit import cv_fit_enabled, enrich_jobs_dataframe_with_cv_fit
+
+        if cv_fit_enabled(cfg):
+            df = enrich_jobs_dataframe_with_cv_fit(df, email_jobs, cfg, root=root)
+            print("CV fit % column added (profile vs job description).", file=sys.stderr)
+
     if table_action != "restore" and job_tracker_enabled(cfg):
         sync_digest_jobs_to_tracker(df, cfg, root=root)
         df = apply_tracker_to_digest_df(df, cfg, root=root)
@@ -885,10 +892,19 @@ def run(argv: List[str] | None = None) -> int:
             return 0
 
         only_new = _digest_only_new(cfg) and not args.email_all_fetched
-        if args.email_all_fetched or not only_new:
+        if only_new:
+            email_jobs = _finalize_jobs_for_digest(db.load_pending_jobs(conn), cfg)
+        elif args.email_all_fetched:
             email_jobs = _finalize_jobs_for_digest(list(jobs), cfg)
         else:
-            email_jobs = _finalize_jobs_for_digest(db.load_pending_jobs(conn), cfg)
+            # digest_email_only_new=false: this run's fetch + recent jobs.db rows (restored / still active).
+            from_fetch = _finalize_jobs_for_digest(list(jobs), cfg)
+            from_stored = _jobs_for_scheduled_digest(conn, cfg)
+            merged: Dict[str, Job] = {normalize_url(j.link): j for j in from_stored if j.link}
+            for j in from_fetch:
+                if j.link:
+                    merged[normalize_url(j.link)] = j
+            email_jobs = sorted(merged.values(), key=lambda x: (-x.score, x.title))
 
         if not email_jobs:
             if only_new:

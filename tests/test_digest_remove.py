@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from job_agent import db as job_db
 from job_agent.digest_remove import (
+    _apply_restore,
     build_remove_yes_url,
     build_restore_url,
     sign_action_token,
@@ -84,6 +86,29 @@ class DigestRemoveTests(unittest.TestCase):
             out = _apply_digest_ignore(jobs, cfg)
             self.assertEqual(len(out), 1)
             self.assertEqual(out[0].link, "https://example.com/other")
+
+    def test_restore_clears_emailed_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "jobs.db"
+            ignore_path = root / "ignore.json"
+            link = normalize_url("https://www.linkedin.com/jobs/view/999")
+            cfg = {
+                "_project_root": str(root),
+                "digest_remove": {"ignore_store_path": str(ignore_path)},
+                "digest_include_jobs_seen_within_days": 2,
+            }
+            job = Job("linkedin_browser", "NVIDIA", "Manager, AIOps", "Israel", link, score=9)
+            conn = job_db.connect(db_path)
+            job_db.upsert_jobs(conn, [job], mark_emailed=True)
+            conn.close()
+            add_removed_record({"link": link, "title": job.title, "company": job.company}, cfg)
+            ok, _ = _apply_restore(link, cfg)
+            self.assertTrue(ok)
+            conn = job_db.connect(db_path)
+            row = conn.execute("SELECT emailed_at FROM jobs WHERE link = ?", (link,)).fetchone()
+            conn.close()
+            self.assertIsNone(row[0])
 
     def test_legacy_links_array_migrates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

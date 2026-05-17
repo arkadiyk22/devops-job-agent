@@ -123,11 +123,17 @@
   "keep_unknown_posted_age": true,
   "email_from_display_name": "Job Agent",
   "email_attach_excel": false,
+  "cv_fit": {
+    "enabled": true,
+    "profile_path": "Arkadiy_Kats_CV.pdf",
+    "min_job_text_chars": 100,
+    "column_name": "CV fit %"
+  },
   "job_tracker": {
     "enabled": true,
     "path": "job_tracker.xlsx",
     "sheet_name": "Jobs in this digest",
-    "apply_links_enabled": true,
+    "apply_links_enabled": false,
     "status_default_new": "New",
     "status_default_on_apply": "In Progress",
     "status_links_enabled": true,

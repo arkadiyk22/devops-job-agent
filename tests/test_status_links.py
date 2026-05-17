@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from job_agent.digest_remove import build_set_status_url, sign_action_token, verify_set_status_token
+from job_agent.digest_remove import (
+    _apply_set_status,
+    build_set_status_url,
+    sign_action_token,
+    verify_set_status_token,
+)
 from job_agent.job_tracker_excel import (
     TRACKER_COL_LAST_UPDATED,
     allowed_status_values,
@@ -22,6 +27,22 @@ class StatusLinkTests(unittest.TestCase):
         cfg = {"job_tracker": {"status_values": ["New", "In Progress", "Interview", "Rejected"]}}
         self.assertEqual(normalize_status_label("declined", cfg), "Rejected")
         self.assertEqual(normalize_status_label("in progress", cfg), "In Progress")
+
+    def test_apply_set_status_success_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = {
+                "_project_root": str(root),
+                "job_tracker": {
+                    "path": "job_tracker.xlsx",
+                    "status_values": ["New", "In Progress", "Interview", "Rejected"],
+                },
+            }
+            link = normalize_url("https://example.com/j/apply-status")
+            ok, msg = _apply_set_status(link, "In Progress", cfg)
+            self.assertTrue(ok)
+            self.assertIn("Status updated", msg)
+            self.assertIn("job_tracker.xlsx", msg)
 
     def test_set_status_token_and_xlsx(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

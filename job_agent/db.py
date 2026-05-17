@@ -105,7 +105,7 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
         exists = cur.fetchone() is not None
         if exists:
             conn.execute(
-                "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = COALESCE(emailed_at, ?) WHERE link = ?",
+                "UPDATE jobs SET payload = ?, last_seen_at = ?, emailed_at = ? WHERE link = ?",
                 (payload, now, emailed_at, job.link),
             )
         else:

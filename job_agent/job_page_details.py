@@ -69,12 +69,19 @@ def fetch_greenhouse_job_details_http(link: str) -> Dict[str, str]:
     if not company or company.lower() == board.lower():
         company = board.replace("-", " ").title()
     loc = _greenhouse_location(job)
+    content = strip_html(str(job.get("content") or ""))
     return {
         "title": title[:300],
         "company": company[:120],
         "location": loc[:120],
         "source": f"greenhouse:{board}",
+        "text": content[:12000],
     }
+
+
+def fetch_greenhouse_job_content_http(link: str) -> str:
+    details = fetch_greenhouse_job_details_http(link)
+    return str(details.get("text") or "").strip()
 
 
 def fetch_job_page_details_http(link: str) -> Dict[str, str]:

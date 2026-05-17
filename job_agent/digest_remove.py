@@ -42,15 +42,21 @@ def digest_remove_enabled(cfg: Dict[str, Any]) -> bool:
     return bool(block.get("enabled", True))
 
 
-def job_tracker_apply_enabled(cfg: Dict[str, Any]) -> bool:
+def job_tracker_digest_columns_enabled(cfg: Dict[str, Any]) -> bool:
+    """Show Last updated + Status columns in digest email."""
     from job_agent.job_tracker_excel import job_tracker_enabled
 
-    if not job_tracker_enabled(cfg):
+    return job_tracker_enabled(cfg)
+
+
+def job_tracker_apply_enabled(cfg: Dict[str, Any]) -> bool:
+    """Whether /apply «Yes» links are offered (off by default; use Status links)."""
+    if not job_tracker_digest_columns_enabled(cfg):
         return False
     block = cfg.get("job_tracker")
     if isinstance(block, dict) and "apply_links_enabled" in block:
         return bool(block.get("apply_links_enabled"))
-    return digest_remove_enabled(cfg)
+    return False
 
 
 def remove_secret(cfg: Dict[str, Any]) -> str:
@@ -200,7 +206,7 @@ def _apply_remove(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     from job_agent import db as job_db
 
     snapshot: Dict[str, Any] = {"link": link}
-    conn = job_db.connect()
+    conn = _db_connect(cfg)
     try:
         job = job_db.load_job_by_link(conn, link)
         if job is not None:
@@ -222,21 +228,21 @@ def _project_root(cfg: Dict[str, Any]) -> "Path":
     return Path(raw).resolve() if raw else Path.cwd().resolve()
 
 
-def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
-    from job_agent.job_tracker_excel import set_job_tracker_status
+def _db_connect(cfg: Dict[str, Any]):
+    from job_agent import db as job_db
 
+    return job_db.connect(_project_root(cfg) / "jobs.db")
+
+
+def _apply_set_status(link: str, status: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
+    from job_agent.job_tracker_excel import default_job_tracker_path, set_job_tracker_status
+
+    root = _project_root(cfg)
     try:
-        canonical = set_job_tracker_status(link, status, cfg, root=_project_root(cfg))
+        canonical = set_job_tracker_status(link, status, cfg, root=root)
     except ValueError as exc:
         return False, f"<p>{html.escape(str(exc))}</p>"
-    title = link
-    path = _project_root(cfg) / "job_tracker.xlsx"
-    block = cfg.get("job_tracker")
-    if isinstance(block, dict) and block.get("path"):
-        from pathlib import Path
-
-        p = Path(str(block["path"]).expanduser())
-        path = p if p.is_absolute() else _project_root(cfg) / p
+    path = default_job_tracker_path(root, cfg)
     tracker_msg = (
         f"<p><strong>Status updated.</strong> Set to <strong>{html.escape(canonical)}</strong>. "
         f"<strong>Last updated</strong> refreshed to now.</p>"
@@ -251,7 +257,7 @@ def _apply_mark_applied(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     snapshot: Dict[str, Any] = {"link": link, "Link": link}
     from job_agent import db as job_db
 
-    conn = job_db.connect()
+    conn = _db_connect(cfg)
     try:
         job = job_db.load_job_by_link(conn, link)
         if job is not None:
@@ -282,14 +288,19 @@ def _apply_restore(link: str, cfg: Dict[str, Any]) -> Tuple[bool, str]:
     snapshot = restore_removed_link(link, cfg)
     if snapshot is None:
         return False, "<p><strong>Not found.</strong> This job was not on your removed list.</p>"
-    conn = job_db.connect()
+    job = record_to_job(snapshot)
+    conn = _db_connect(cfg)
     try:
-        if snapshot.get("title") or snapshot.get("company"):
-            job_db.upsert_jobs(conn, [record_to_job(snapshot)], mark_emailed=False)
+        job_db.upsert_jobs(conn, [job], mark_emailed=False)
     finally:
         conn.close()
-    title = snapshot.get("title") or link
-    return True, f"<p><strong>Restored.</strong> «{title}» can appear in digests again on the next fetch.</p>"
+    title = snapshot.get("title") or job.title or link
+    return (
+        True,
+        f"<p><strong>Restored.</strong> «{html.escape(str(title))}» will return to "
+        "<strong>Jobs in this digest</strong> on the next email (within the usual "
+        f"{int((cfg.get('digest_include_jobs_seen_within_days') or 2))}-day window).</p>",
+    )
 
 
 class _RemoveHandler(BaseHTTPRequestHandler):
@@ -311,6 +322,20 @@ class _RemoveHandler(BaseHTTPRequestHandler):
         return path
 
     def do_GET(self) -> None:
+        try:
+            self._do_get_routed()
+        except Exception as exc:
+            print(f"[digest-remove] handler error: {exc}", file=sys.stderr)
+            try:
+                self._send_html(
+                    500,
+                    "Server error",
+                    f"<p>Something went wrong: {html.escape(str(exc))}</p>",
+                )
+            except Exception:
+                pass
+
+    def _do_get_routed(self) -> None:
         parsed = urlparse(self.path)
         route = self._route_path(parsed)
         if route == "/health":

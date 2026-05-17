@@ -11,14 +11,14 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Set
 import pandas as pd
 
 from job_agent.digest_remove import (
-    build_apply_yes_url,
     build_remove_yes_url,
     build_restore_url,
     build_set_status_url,
     digest_remove_enabled,
-    job_tracker_apply_enabled,
+    job_tracker_digest_columns_enabled,
 )
-from job_agent.digest_search_profile import build_search_profile_df
+from job_agent.cv_fit import CV_FIT_COLUMN
+from job_agent.digest_search_profile import build_search_profile_with_fetch_stats_df
 from job_agent.ignore_store import merge_ignore_links
 DigestTableAction = Literal["remove", "restore"]
 from job_agent.settings import get_setting
@@ -32,6 +32,7 @@ _EMAIL_JOB_COLUMNS: Sequence[str] = (
     "Link",
     "Source",
     "Location",
+    CV_FIT_COLUMN,
 )
 
 # Removed-jobs subsection (and removed-only email): no Network column.
@@ -55,6 +56,7 @@ _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Link": "Job link / URL",
     "Source": "Source",
     "Location": "Location",
+    CV_FIT_COLUMN: "CV fit",
     "Remove": "Remove",
     "Restore": "Restore",
     TRACKER_COL_LAST_UPDATED: "Last updated",
@@ -92,14 +94,81 @@ def _jobs_email_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return headers
 
 
-def _status_cell_html(link: str, current: str, cfg: Dict[str, Any]) -> str:
+# Digest Status: In Progress blue, Interview green, Rejected red.
+_STATUS_COLORS: Dict[str, str] = {
+    "in progress": "#1565c0",
+    "interview": "#2e7d32",
+    "rejected": "#c62828",
+}
+# Removed jobs subsection: uniform gray text.
+_REMOVED_JOBS_ROW_COLOR = "#757575"
+
+
+def _status_color(label: str) -> str:
+    return _STATUS_COLORS.get((label or "").strip().lower(), "")
+
+
+def _is_new_status(label: str, cfg: Dict[str, Any] | None = None) -> bool:
+    s = (label or "").strip().lower()
+    if not s or s == "new":
+        return True
+    if cfg:
+        from job_agent.job_tracker_excel import status_default_new
+
+        return s == status_default_new(cfg).strip().lower()
+    return False
+
+
+def _row_color_for_status(status: str, cfg: Dict[str, Any] | None = None) -> str:
+    """Row text color only for In Progress / Interview / Rejected; New stays default."""
+    if _is_new_status(status, cfg):
+        return ""
+    return _status_color(status)
+
+
+def _td_style(*, color: str = "", extra: str = "") -> str:
+    parts: List[str] = []
+    if color:
+        parts.append(f"color:{color};")
+    if extra:
+        parts.append(extra if extra.endswith(";") else f"{extra};")
+    return f' style="{"".join(parts)}"' if parts else ""
+
+
+def _link_html(url: str, label: str, *, color: str = "", extra_style: str = "") -> str:
+    esc = html.escape
+    style = extra_style
+    if color:
+        style = f"{style}color:{color};" if style else f"color:{color};"
+    style_attr = f' style="{style}"' if style else ""
+    return f'<a href="{esc(url, quote=True)}"{style_attr}>{esc(label)}</a>'
+
+
+def _status_label_html(label: str, *, link: str = "") -> str:
+    esc = html.escape
+    text = esc(label)
+    color = _status_color(label)
+    if link:
+        style = "font-size:12px;font-weight:600;"
+        if color:
+            style += f"color:{color};"
+        return f'<a href="{esc(link, quote=True)}" style="{style}">{text}</a>'
+    if color:
+        return f'<strong style="color:{color};">{text}</strong>'
+    return f"<strong>{text}</strong>"
+
+
+def _status_cell_html(
+    link: str, current: str, cfg: Dict[str, Any], *, row_color: str = ""
+) -> str:
     from job_agent.job_tracker_excel import allowed_status_values, status_links_enabled
 
-    esc = html.escape
     if not link:
-        return "<td>—</td>"
-    current_norm = (current or "").strip()
-    parts = [f"<strong>{esc(current_norm or 'New')}</strong>"]
+        return f"<td{_td_style(color=row_color)}>—</td>"
+    current_norm = (current or "").strip() or "New"
+    # New: default text on the cell; only the quick-set links keep their own colors.
+    cell_color = "" if _is_new_status(current_norm, cfg) else row_color
+    parts = [_status_label_html(current_norm)]
     if status_links_enabled(cfg) and digest_remove_enabled(cfg):
         choices = allowed_status_values(cfg)
         links: List[str] = []
@@ -107,32 +176,24 @@ def _status_cell_html(link: str, current: str, cfg: Dict[str, Any]) -> str:
             if label.lower() == current_norm.lower():
                 continue
             url = build_set_status_url(link, label, cfg)
-            links.append(f'<a href="{esc(url, quote=True)}" style="font-size:12px;">{esc(label)}</a>')
+            links.append(_status_label_html(label, link=url))
         if links:
             parts.append(
-                '<div style="margin-top:4px;font-size:12px;color:#444;">'
+                '<div style="margin-top:4px;font-size:12px;">'
                 + " · ".join(links)
                 + "</div>"
             )
-    return f'<td style="font-size:13px;vertical-align:top;">{"".join(parts)}</td>'
-
-
-def _apply_yes_cell_html(link: str, cfg: Dict[str, Any]) -> str:
-    esc = html.escape
-    if not job_tracker_apply_enabled(cfg) or not link:
-        return '<td style="text-align:center;">—</td>'
-    url = build_apply_yes_url(link, cfg)
     return (
-        '<td style="text-align:center;white-space:nowrap;">'
-        f'<a href="{esc(url, quote=True)}" style="font-size:13px;">Yes</a>'
-        "</td>"
+        f"<td{_td_style(color=cell_color, extra='font-size:13px;vertical-align:top;')}>"
+        f"{''.join(parts)}</td>"
     )
 
 
-def _action_cell_html(link: str, cfg: Dict[str, Any], action: DigestTableAction) -> str:
-    esc = html.escape
+def _action_cell_html(
+    link: str, cfg: Dict[str, Any], action: DigestTableAction, *, row_color: str = ""
+) -> str:
     if not digest_remove_enabled(cfg) or not link:
-        return '<td style="text-align:center;">—</td>'
+        return f"<td{_td_style(color=row_color, extra='text-align:center;')}>—</td>"
     if action == "remove":
         url = build_remove_yes_url(link, cfg)
         label = "Yes"
@@ -140,8 +201,8 @@ def _action_cell_html(link: str, cfg: Dict[str, Any], action: DigestTableAction)
         url = build_restore_url(link, cfg)
         label = "Restore"
     return (
-        '<td style="text-align:center;white-space:nowrap;">'
-        f'<a href="{esc(url, quote=True)}" style="font-size:13px;">{esc(label)}</a>'
+        f"<td{_td_style(color=row_color, extra='text-align:center;white-space:nowrap;')}>"
+        f'{_link_html(url, label, color=row_color, extra_style="font-size:13px;")}'
         "</td>"
     )
 
@@ -153,6 +214,7 @@ def _df_to_html_table(
     *,
     cfg: Dict[str, Any] | None = None,
     table_action: DigestTableAction | None = "remove",
+    fixed_row_color: str = "",
 ) -> str:
     if df.empty:
         return "<p><em>No rows.</em></p>"
@@ -162,8 +224,8 @@ def _df_to_html_table(
         for c in columns
         if c in df.columns
         or (table_action and c == action_col)
-        or (c == TRACKER_COL_LAST_UPDATED and job_tracker_apply_enabled(cfg))
-        or (c == "Status" and job_tracker_apply_enabled(cfg))
+        or (c == TRACKER_COL_LAST_UPDATED and job_tracker_digest_columns_enabled(cfg))
+        or (c == "Status" and job_tracker_digest_columns_enabled(cfg))
     ]
     if not use:
         return "<p><em>No columns.</em></p>"
@@ -174,31 +236,41 @@ def _df_to_html_table(
     for _, row in df.iterrows():
         cells = []
         link_val = str(row.get("Link", "") or "")
+        row_status = ""
+        if fixed_row_color:
+            row_color = fixed_row_color
+        else:
+            if job_tracker_digest_columns_enabled(cfg) and "Status" in df.columns:
+                row_status = str(row.get("Status", "") or "").strip() or "New"
+            row_color = _row_color_for_status(row_status, cfg)
         for c in use:
-            if c == TRACKER_COL_LAST_UPDATED and job_tracker_apply_enabled(cfg):
-                applied = str(row.get(TRACKER_COL_LAST_UPDATED, "") or "").strip()
-                if applied:
-                    cells.append(f"<td style=\"white-space:nowrap;\">{esc(applied)}</td>")
+            if c == TRACKER_COL_LAST_UPDATED and job_tracker_digest_columns_enabled(cfg):
+                updated = str(row.get(TRACKER_COL_LAST_UPDATED, "") or "").strip()
+                if updated:
+                    cells.append(
+                        f"<td{_td_style(color=row_color, extra='white-space:nowrap;')}>{esc(updated)}</td>"
+                    )
                 else:
-                    cells.append(_apply_yes_cell_html(link_val, cfg))
+                    cells.append(f"<td{_td_style(color=row_color, extra='text-align:center;')}>—</td>")
                 continue
-            if c == "Status" and job_tracker_apply_enabled(cfg):
+            if c == "Status" and job_tracker_digest_columns_enabled(cfg):
                 cur = str(row.get("Status", "") or "").strip()
-                cells.append(_status_cell_html(link_val, cur, cfg))
+                cells.append(_status_cell_html(link_val, cur, cfg, row_color=row_color))
                 continue
             if c in ("Remove", "Restore") and table_action:
-                cells.append(_action_cell_html(link_val, cfg, table_action))
+                cells.append(_action_cell_html(link_val, cfg, table_action, row_color=row_color))
                 continue
             val = row.get(c, "")
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c == "Link" and s.startswith("http"):
                 cells.append(
-                    f'<td style="word-break:break-all;"><a href="{esc(s, quote=True)}">{esc(s)}</a></td>'
+                    f"<td{_td_style(color=row_color, extra='word-break:break-all;')}>"
+                    f"{_link_html(s, s, color=row_color)}</td>"
                 )
             elif c == "Network" and s:
-                cells.append(f'<td style="font-size:13px;">{esc(s)}</td>')
+                cells.append(f"<td{_td_style(color=row_color, extra='font-size:13px;')}>{esc(s)}</td>")
             else:
-                cells.append(f"<td>{esc(s)}</td>")
+                cells.append(f"<td{_td_style(color=row_color)}>{esc(s)}</td>")
         trs.append("<tr>" + "".join(cells) + "</tr>")
     return (
         '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">'
@@ -343,6 +415,7 @@ def _removed_jobs_email_block(
         headers,
         cfg=cfg,
         table_action="restore",
+        fixed_row_color=_REMOVED_JOBS_ROW_COLOR,
     )
     return (
         "<h2 style=\"font-family:sans-serif;\">Removed jobs</h2>"
@@ -380,16 +453,14 @@ def _build_digest_html(
     only_new = bool(cfg.get("digest_email_only_new", False))
     search_block = ""
     if table_action != "restore":
-        profile_df = build_search_profile_df(cfg)
+        profile_df = build_search_profile_with_fetch_stats_df(cfg, fetch_stats_df)
         if not profile_df.empty:
-            search_block = _stats_block_html("Search profile", profile_df, "")
+            search_block = _stats_block_html(
+                "Search profile",
+                profile_df,
+                "Unique added = new job links from this run for that source (— = filter or not fetched).",
+            )
     fetch_block = ""
-    if table_action != "restore" and fetch_stats_df is not None and not fetch_stats_df.empty:
-        fetch_block = _stats_block_html(
-            "Sources checked (this run)",
-            fetch_stats_df,
-            "",
-        )
     if table_action == "restore":
         jobs_heading = "Removed jobs"
     else:
@@ -398,7 +469,7 @@ def _build_digest_html(
     email_cols = list(
         _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
     )
-    if table_action != "restore" and job_tracker_apply_enabled(cfg):
+    if table_action != "restore" and job_tracker_digest_columns_enabled(cfg):
         email_cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS]
     email_cols += [action_col] if digest_remove_enabled(cfg) and table_action else []
     jobs_table = _df_to_html_table(
@@ -445,18 +516,11 @@ def _build_digest_plain(
     ]
     job_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
     cols = [c for c in job_cols if c in jobs_df.columns]
-    if table_action != "restore" and job_tracker_apply_enabled(cfg or {}):
+    if table_action != "restore" and job_tracker_digest_columns_enabled(cfg or {}):
         cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS if c in jobs_df.columns]
     for _, row in jobs_df.iterrows():
         parts = [f"{c}: {row.get(c, '')}" for c in cols]
         link = str(row.get("Link", "") or "")
-        if (
-            job_tracker_apply_enabled(cfg or {})
-            and link
-            and table_action != "restore"
-            and not str(row.get(TRACKER_COL_LAST_UPDATED, "") or "").strip()
-        ):
-            parts.append(f"Last updated: Yes (mark applied) — {build_apply_yes_url(link, cfg or {})}")
         if digest_remove_enabled(cfg or {}) and link and table_action == "remove":
             parts.append(f"Remove: Yes — {build_remove_yes_url(link, cfg or {})}")
         elif digest_remove_enabled(cfg or {}) and link and table_action == "restore":
@@ -476,11 +540,9 @@ def _build_digest_plain(
             lines.append(" | ".join(parts))
             lines.append("")
     if table_action != "restore":
-        profile_df = build_search_profile_df(cfg_eff)
+        profile_df = build_search_profile_with_fetch_stats_df(cfg_eff, fetch_stats_df)
         if not profile_df.empty:
             lines += _stats_block_plain("Search profile:", profile_df)
-    if table_action != "restore" and fetch_stats_df is not None and not fetch_stats_df.empty:
-        lines += _stats_block_plain("Sources checked (this run):", fetch_stats_df)
     if not network_df.empty:
         lines.append("Your network at these employers (from LinkedIn connections export):")
         for _, row in network_df.iterrows():

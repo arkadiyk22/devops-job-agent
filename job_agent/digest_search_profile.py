@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -83,3 +83,102 @@ def build_search_profile_df(cfg: Dict[str, Any]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["Scope", "Keywords"])
     return pd.DataFrame(rows, columns=["Scope", "Keywords"])
+
+
+_PROFILE_COLUMNS = ("Scope", "Keywords", "Unique added")
+_NA_ADDED = "—"
+
+
+def _fetch_stats_by_site(fetch_stats_df: pd.DataFrame) -> Dict[str, int]:
+    if fetch_stats_df is None or fetch_stats_df.empty:
+        return {}
+    out: Dict[str, int] = {}
+    for _, row in fetch_stats_df.iterrows():
+        site = str(row.get("Site") or "").strip()
+        if not site:
+            continue
+        added = pd.to_numeric(row.get("Unique added"), errors="coerce")
+        out[site] = 0 if pd.isna(added) else int(added)
+    return out
+
+
+def _sum_sites(by_site: Dict[str, int], prefix: str) -> Optional[int]:
+    matches = {k: v for k, v in by_site.items() if k.startswith(prefix)}
+    if not matches:
+        return None
+    return sum(matches.values())
+
+
+def _unique_added_display(scope: str, by_site: Dict[str, int]) -> str:
+    s = (scope or "").strip()
+    if s.startswith("LinkedIn Jobs"):
+        if "LinkedIn (browser)" in by_site:
+            return str(by_site["LinkedIn (browser)"])
+        return _NA_ADDED
+    if s.startswith("Google web query"):
+        for label in ("Google (browser web)", "SerpAPI: Google web (site: ATS / LinkedIn)"):
+            if label in by_site:
+                return str(by_site[label])
+        return _NA_ADDED
+    if s == "Greenhouse boards":
+        total = _sum_sites(by_site, "Greenhouse:")
+        return str(total) if total is not None else _NA_ADDED
+    if s == "Lever sites":
+        total = _sum_sites(by_site, "Lever:")
+        return str(total) if total is not None else _NA_ADDED
+    if s == "RSS feeds":
+        total = _sum_sites(by_site, "RSS:")
+        return str(total) if total is not None else _NA_ADDED
+    return _NA_ADDED
+
+
+def _consumed_sites(scope: str, by_site: Dict[str, int]) -> Set[str]:
+    s = (scope or "").strip()
+    consumed: Set[str] = set()
+    if s.startswith("LinkedIn Jobs") and "LinkedIn (browser)" in by_site:
+        consumed.add("LinkedIn (browser)")
+    if s.startswith("Google web query"):
+        for label in ("Google (browser web)", "SerpAPI: Google web (site: ATS / LinkedIn)"):
+            if label in by_site:
+                consumed.add(label)
+    if s == "Greenhouse boards":
+        consumed.update(k for k in by_site if k.startswith("Greenhouse:"))
+    if s == "Lever sites":
+        consumed.update(k for k in by_site if k.startswith("Lever:"))
+    if s == "RSS feeds":
+        consumed.update(k for k in by_site if k.startswith("RSS:"))
+    return consumed
+
+
+def build_search_profile_with_fetch_stats_df(
+    cfg: Dict[str, Any],
+    fetch_stats_df: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """
+    Search profile + per-source «Unique added» from this run (replaces separate Sources table).
+    """
+    profile = build_search_profile_df(cfg)
+    by_site = _fetch_stats_by_site(fetch_stats_df if fetch_stats_df is not None else pd.DataFrame())
+    if profile.empty:
+        profile = pd.DataFrame(columns=list(_PROFILE_COLUMNS))
+
+    if "Unique added" not in profile.columns:
+        profile["Unique added"] = _NA_ADDED
+
+    consumed: Set[str] = set()
+    if not profile.empty:
+        added_col: List[str] = []
+        for scope in profile["Scope"].astype(str):
+            added_col.append(_unique_added_display(scope, by_site))
+            consumed |= _consumed_sites(scope, by_site)
+        profile["Unique added"] = added_col
+
+    extra_rows: List[Dict[str, str]] = []
+    for site, count in sorted(by_site.items()):
+        if site in consumed:
+            continue
+        extra_rows.append({"Scope": site, "Keywords": _NA_ADDED, "Unique added": str(count)})
+    if extra_rows:
+        profile = pd.concat([profile, pd.DataFrame(extra_rows)], ignore_index=True)
+
+    return profile.reindex(columns=list(_PROFILE_COLUMNS), fill_value=_NA_ADDED)
