@@ -13,6 +13,7 @@ from job_agent.browser.session import open_linkedin_login, playwright_available,
 from job_agent.models import Job
 from job_agent.network import (
     REACH_OUT_LINKEDIN_SOURCE,
+    is_usable_reach_out_person,
     linkedin_reach_out_snapshot_ok,
     person_display_name,
     reach_out_people_have_full_names,
@@ -316,6 +317,7 @@ _REACH_OUT_EXTRACT_JS = """
     const aria = (a.getAttribute('aria-label') || '').trim();
     const imgAlt = (a.querySelector('img[alt]')?.getAttribute('alt') || '').trim();
     const candidates = [];
+    if (aria) candidates.push(aria);
     if (row) {
       if (rowText) candidates.push(rowText);
       row.querySelectorAll(
@@ -325,7 +327,7 @@ _REACH_OUT_EXTRACT_JS = """
         if (t) candidates.push(t);
       });
     }
-    candidates.push(aria, blob, imgAlt);
+    candidates.push(blob, imgAlt);
     if (!candidates.some((c) => (c || '').trim())) return null;
     seen.add(href);
     const name = pickFullName(candidates);
@@ -342,6 +344,28 @@ _REACH_OUT_EXTRACT_JS = """
     const row = parseAnchor(a);
     if (row) people.push(row);
   });
+  if (people.length === 0 && root) {
+    const text = (root.innerText || '').replace(/\\s+/g, ' ');
+    const re = /([\\p{L}][\\p{L}'\\-]*(?:\\s+[\\p{L}][\\p{L}'\\-]*)+)\\s*[·•]\\s*1st\\b/gu;
+    let m;
+    const seenNames = new Set();
+    while ((m = re.exec(text)) !== null) {
+      let name = m[1].replace(/\\s*profile\\s*photo\\s*/gi, ' ').replace(/\\s+/g, ' ').trim();
+      const w = name.split(/\\s+/).filter(Boolean);
+      if (w.length >= 3 && w[0].toLowerCase() === w[1].toLowerCase()) name = w.slice(1).join(' ');
+      const key = name.toLowerCase();
+      if (!name || seenNames.has(key)) continue;
+      seenNames.add(key);
+      const parts = name.split(/\\s+/).filter(Boolean);
+      people.push({
+        name,
+        first_name: parts[0] || '',
+        last_name: parts.length > 1 ? parts.slice(1).join(' ') : '',
+        role: '',
+        profile_url: '',
+      });
+    }
+  }
   return people;
 }
 """
@@ -507,15 +531,15 @@ def _extract_reach_out_people(page) -> List[Dict[str, str]]:
         )
         if not full:
             continue
-        out.append(
-            {
-                "name": full[:80],
-                "first_name": str(item.get("first_name") or "").strip()[:40],
-                "last_name": str(item.get("last_name") or "").strip()[:40],
-                "role": str(item.get("role") or "").strip()[:120],
-                "profile_url": str(item.get("profile_url") or "").strip(),
-            }
-        )
+        row = {
+            "name": full[:80],
+            "first_name": str(item.get("first_name") or "").strip()[:40],
+            "last_name": str(item.get("last_name") or "").strip()[:40],
+            "role": str(item.get("role") or "").strip()[:120],
+            "profile_url": str(item.get("profile_url") or "").strip(),
+        }
+        if is_usable_reach_out_person(row):
+            out.append(row)
     return out
 
 
@@ -784,6 +808,9 @@ def enrich_reach_out_for_jobs(
         if job.source != "linkedin_browser":
             continue
         raw = job.raw if isinstance(job.raw, dict) else {}
+        if for_email:
+            need.append(job)
+            continue
         if linkedin_reach_out_snapshot_ok(raw):
             continue
         need.append(job)
@@ -861,7 +888,7 @@ def _enrich_jobs_reach_out_people(
                     file=sys.stderr,
                 )
                 continue
-            prior_ok = linkedin_reach_out_snapshot_ok(raw)
+            prior_ok = linkedin_reach_out_snapshot_ok(raw) and not for_email
             people = _extract_reach_out_people(page)
             summary = _extract_reach_out_collapsed_summary(page)
             _apply_reach_out_scrape_to_job(job, people, summary, prior_ok=prior_ok)

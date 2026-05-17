@@ -281,6 +281,32 @@ def network_column_text(
     return text
 
 
+def hydrate_reach_out_from_db(jobs: Iterable[Job], stored_by_link: Dict[str, Job]) -> int:
+    """Copy reach-out fields from stored jobs when the digest row would otherwise be empty."""
+    merged = 0
+    for job in jobs:
+        if job.source != "linkedin_browser":
+            continue
+        if network_column_for_job(job, [], {}).strip():
+            continue
+        stored = stored_by_link.get(normalize_url(job.link))
+        if not stored or not isinstance(stored.raw, dict):
+            continue
+        block = {
+            k: stored.raw[k]
+            for k in ("reach_out_people", "reach_out_source", "reach_out_summary")
+            if k in stored.raw
+        }
+        if not block:
+            continue
+        raw = dict(job.raw) if isinstance(job.raw, dict) else {}
+        raw.update(block)
+        job.raw = raw
+        if network_column_for_job(job, [], {}).strip():
+            merged += 1
+    return merged
+
+
 def enrich_jobs_dataframe_with_network(
     df: pd.DataFrame,
     jobs: Iterable[Job],

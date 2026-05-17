@@ -211,23 +211,18 @@ def _send_email_for_jobs(
 
     if table_action != "restore" and not args.dry_run and not args.skip_network and uses_browser_search(cfg):
         if conn is not None:
-            from job_agent.network import linkedin_reach_out_snapshot_ok
+            from job_agent.network import hydrate_reach_out_from_db
 
+            stored_by_link: Dict[str, Job] = {}
             for j in email_jobs:
                 if j.source != "linkedin_browser":
                     continue
-                if linkedin_reach_out_snapshot_ok(j.raw if isinstance(j.raw, dict) else {}):
-                    continue
                 stored = db.load_job_by_link(conn, j.link)
-                if not stored or not isinstance(stored.raw, dict):
-                    continue
-                if not linkedin_reach_out_snapshot_ok(stored.raw):
-                    continue
-                merged = dict(j.raw) if isinstance(j.raw, dict) else {}
-                for key in ("reach_out_people", "reach_out_source", "reach_out_summary"):
-                    if key in stored.raw:
-                        merged[key] = stored.raw[key]
-                j.raw = merged
+                if stored:
+                    stored_by_link[normalize_url(j.link)] = stored
+            n = hydrate_reach_out_from_db(email_jobs, stored_by_link)
+            if n:
+                print(f"Reach-out: hydrated {n} job(s) from jobs.db before scrape.", file=sys.stderr)
         enrich_reach_out_for_jobs(email_jobs, cfg, for_email=True)
         if conn is not None:
             db.upsert_jobs(conn, email_jobs, mark_emailed=False)
