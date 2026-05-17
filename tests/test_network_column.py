@@ -70,6 +70,12 @@ def test_linkedin_reach_out_snapshot_ok_requires_source_and_full_name():
             "reach_out_source": REACH_OUT_LINKEDIN_SOURCE,
         }
     )
+    assert not linkedin_reach_out_snapshot_ok(
+        {
+            "reach_out_people": [{"name": "View Lee Amiga's verified profile"}],
+            "reach_out_source": REACH_OUT_LINKEDIN_SOURCE,
+        }
+    )
     assert linkedin_reach_out_snapshot_ok(
         {
             "reach_out_people": [
@@ -78,6 +84,10 @@ def test_linkedin_reach_out_snapshot_ok_requires_source_and_full_name():
             "reach_out_source": REACH_OUT_LINKEDIN_SOURCE,
         }
     )
+
+
+def test_person_display_name_strips_verified_profile_aria():
+    assert person_display_name({"name": "View Lee Amiga's verified profile"}) == "Lee Amiga"
 
 
 def test_read_connections_csv_minimal():

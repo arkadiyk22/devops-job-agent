@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import pandas as pd
 
 from job_agent.models import Job
+from job_agent.util import normalize_url
 
 _SUFFIX_RE = re.compile(
     r"\b(inc\.?|llc\.?|ltd\.?|limited|corp\.?|corporation|plc|gmbh|bv|s\.a\.|s\.p\.a\.)\.?\s*$",
@@ -31,6 +32,10 @@ _SUFFIX_RE = re.compile(
 _PROFILE_PHOTO_SUFFIX_RE = re.compile(r"\s*profile\s*photo\s*$", re.I)
 _VIEW_PROFILE_ARIA_RE = re.compile(
     r"^(?:view\s+)?(.+?)(?:'s|'s|’s)\s+profile\s*$",
+    re.I,
+)
+_VIEW_PROFILE_VERIFIED_RE = re.compile(
+    r"^(?:view\s+)?(.+?)(?:'s|'s|’s)\s+verified\s+profile\s*$",
     re.I,
 )
 
@@ -152,9 +157,11 @@ def person_display_name(p: Dict[str, str]) -> str:
     if not raw:
         return ""
     raw = _PROFILE_PHOTO_SUFFIX_RE.sub("", raw).strip()
-    m = _VIEW_PROFILE_ARIA_RE.match(raw)
+    m = _VIEW_PROFILE_VERIFIED_RE.match(raw) or _VIEW_PROFILE_ARIA_RE.match(raw)
     if m:
         raw = m.group(1).strip()
+    if re.match(r"^view\s+", raw, re.I):
+        raw = re.sub(r"^view\s+", "", raw, flags=re.I).strip()
     # Drop degree suffix: "Jane Doe · 1st" -> "Jane Doe"
     if "·" in raw:
         head = raw.split("·", 1)[0].strip()
@@ -164,17 +171,28 @@ def person_display_name(p: Dict[str, str]) -> str:
     return raw
 
 
+def is_usable_reach_out_person(p: Dict[str, str]) -> bool:
+    """Reject aria/photo placeholders and hiring-team style single-token junk."""
+    if not isinstance(p, dict):
+        return False
+    raw_name = (p.get("name") or "").strip()
+    raw_low = raw_name.lower()
+    if raw_low.startswith("view ") or "verified profile" in raw_low or "profile photo" in raw_low:
+        return False
+    name = person_display_name(p)
+    if not name or len(name) < 2:
+        return False
+    low = name.lower()
+    if "profile photo" in low or low.startswith("view "):
+        return False
+    if (p.get("last_name") or "").strip():
+        return True
+    return len(name.split()) >= 2
+
+
 def reach_out_people_have_full_names(people: List[Dict[str, str]]) -> bool:
-    """True if at least one scraped row has a multi-word or first+last name."""
-    for p in people:
-        if not isinstance(p, dict):
-            continue
-        if (p.get("last_name") or "").strip():
-            return True
-        name = person_display_name(p)
-        if name and len(name.split()) >= 2:
-            return True
-    return False
+    """True if at least one scraped row has a usable full name."""
+    return any(is_usable_reach_out_person(p) for p in people if isinstance(p, dict))
 
 
 def linkedin_reach_out_snapshot_ok(raw: Dict[str, Any]) -> bool:
@@ -203,7 +221,8 @@ def format_reach_out_people(people: List[Dict[str, str]], *, max_people: int = 8
     if not people:
         return ""
     cap = max(1, max_people)
-    parts = [format_reach_out_person(p) for p in people[:cap]]
+    usable = [p for p in people if isinstance(p, dict) and is_usable_reach_out_person(p)]
+    parts = [format_reach_out_person(p) for p in usable[:cap]]
     parts = [p for p in parts if p]
     extra = len(people) - cap
     text = "; ".join(parts)
@@ -225,7 +244,12 @@ def network_column_for_job(
     if isinstance(scraped, list) and scraped:
         rows = [x for x in scraped if isinstance(x, dict)]
         if rows:
-            return format_reach_out_people(rows, max_people=max_people)
+            text = format_reach_out_people(rows, max_people=max_people)
+            if text:
+                return text
+    summary = str(raw.get("reach_out_summary") or "").strip()
+    if summary:
+        return summary
     return network_column_text(job, connections, max_people=max_people)
 
 
@@ -266,9 +290,11 @@ def enrich_jobs_dataframe_with_network(
     """Add or fill ``Network`` column on the jobs digest table."""
     block = cfg.get("network") if isinstance(cfg.get("network"), dict) else {}
     max_people = int(block.get("max_connections_per_job_in_column") or 8)
-    by_link = {j.link: network_column_for_job(j, connections, cfg) for j in jobs}
+    by_link = {normalize_url(j.link): network_column_for_job(j, connections, cfg) for j in jobs}
     out = df.copy()
-    out["Network"] = out["Link"].map(lambda link: by_link.get(str(link), "") if link in by_link else "")
+    out["Network"] = out["Link"].map(
+        lambda link: by_link.get(normalize_url(str(link or "")), "")
+    )
     if "Link" not in out.columns:
         out["Network"] = [network_column_for_job(j, connections, cfg) for j in jobs]
     return out

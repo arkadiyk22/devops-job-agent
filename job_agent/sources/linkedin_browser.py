@@ -15,6 +15,7 @@ from job_agent.network import (
     REACH_OUT_LINKEDIN_SOURCE,
     linkedin_reach_out_snapshot_ok,
     person_display_name,
+    reach_out_people_have_full_names,
 )
 from job_agent.scoring import score_title
 from job_agent.util import normalize_url
@@ -427,6 +428,54 @@ def _scroll_job_details_pane(page) -> None:
         pass
 
 
+_REACH_OUT_SUMMARY_JS = """
+() => {
+  const card =
+    document.querySelector('[class*="connections-card-summary"]') ||
+    document.querySelector('[class*="people-who-can-help__connections-card"]');
+  if (!card) return '';
+  let t = (card.innerText || '').replace(/\\s+/g, ' ').trim();
+  t = t.replace(/\\s*Show all\\s*$/i, '').replace(/\\s*הצג הכל\\s*$/i, '').trim();
+  t = t.replace(/^[\\w\\s]+ logo\\s+/i, '').trim();
+  if (/meet the hiring team|hiring team|צוות הגיוס/i.test(t)) return '';
+  if (/in your network|ברשת|אנשים ש|others in your network/i.test(t)) return t;
+  return '';
+}
+"""
+
+
+def _extract_reach_out_collapsed_summary(page) -> str:
+    try:
+        text = page.evaluate(_REACH_OUT_SUMMARY_JS)
+        return str(text or "").strip()[:200]
+    except Exception:
+        return ""
+
+
+def _apply_reach_out_scrape_to_job(
+    job: Job,
+    people: List[Dict[str, str]],
+    summary: str,
+    *,
+    prior_ok: bool,
+) -> None:
+    if not isinstance(job.raw, dict):
+        job.raw = {}
+    if people:
+        job.raw["reach_out_people"] = people
+        job.raw["reach_out_source"] = REACH_OUT_LINKEDIN_SOURCE
+        job.raw.pop("reach_out_summary", None)
+    elif prior_ok:
+        pass
+    else:
+        job.raw["reach_out_people"] = []
+        job.raw.pop("reach_out_source", None)
+    if summary and not reach_out_people_have_full_names(job.raw.get("reach_out_people") or []):
+        job.raw["reach_out_summary"] = summary
+    elif people:
+        job.raw.pop("reach_out_summary", None)
+
+
 def _extract_reach_out_people(page) -> List[Dict[str, str]]:
     try:
         found = _wait_for_reach_out_section(page, timeout_ms=18_000)
@@ -796,6 +845,11 @@ def _enrich_jobs_reach_out_people(
             jid = _job_id_from_href(job.link)
         if not jid:
             continue
+        raw = job.raw if isinstance(job.raw, dict) else {}
+        if not for_email and linkedin_reach_out_snapshot_ok(raw):
+            if reach_out_people_have_full_names(raw.get("reach_out_people") or []):
+                with_people += 1
+            continue
         view_url = _search_url_with_job_id(search_url, jid)
         try:
             _dismiss_modal(page)
@@ -807,18 +861,20 @@ def _enrich_jobs_reach_out_people(
                     file=sys.stderr,
                 )
                 continue
+            prior_ok = linkedin_reach_out_snapshot_ok(raw)
             people = _extract_reach_out_people(page)
-            if not isinstance(job.raw, dict):
-                job.raw = {}
-            job.raw["reach_out_people"] = people
-            if people:
-                job.raw["reach_out_source"] = REACH_OUT_LINKEDIN_SOURCE
-            else:
-                job.raw.pop("reach_out_source", None)
+            summary = _extract_reach_out_collapsed_summary(page)
+            _apply_reach_out_scrape_to_job(job, people, summary, prior_ok=prior_ok)
             if people:
                 with_people += 1
                 print(
                     f"LinkedIn reach-out: {len(people)} at {job.company or '?'} — {job.title[:50]}",
+                    file=sys.stderr,
+                )
+            elif summary:
+                with_people += 1
+                print(
+                    f"LinkedIn reach-out: summary only for {job.company or '?'} — {summary[:60]}",
                     file=sys.stderr,
                 )
             else:
