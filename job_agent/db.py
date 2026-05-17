@@ -118,6 +118,16 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: List[Job], *, mark_emailed: bool
     return new_count
 
 
+def load_job_by_link(conn: sqlite3.Connection, link: str) -> Job | None:
+    key = (link or "").strip()
+    if not key:
+        return None
+    row = conn.execute("SELECT payload FROM jobs WHERE link = ?", (key,)).fetchone()
+    if not row or not row[0]:
+        return None
+    return job_from_payload(str(row[0]))
+
+
 def load_pending_jobs(conn: sqlite3.Connection) -> List[Job]:
     """Jobs stored but not yet included in a digest email."""
     out: List[Job] = []
@@ -166,6 +176,18 @@ def mark_emailed(conn: sqlite3.Connection, links: List[str]) -> None:
         if link:
             conn.execute("UPDATE jobs SET emailed_at = ? WHERE link = ?", (now, link))
     conn.commit()
+
+
+def delete_jobs(conn: sqlite3.Connection, links: List[str]) -> int:
+    """Remove job rows (used when user marks Remove → Yes in digest email)."""
+    deleted = 0
+    for link in links:
+        if not link:
+            continue
+        cur = conn.execute("DELETE FROM jobs WHERE link = ?", (link,))
+        deleted += cur.rowcount
+    conn.commit()
+    return deleted
 
 
 def filter_new_links(conn: sqlite3.Connection, links: list[str]) -> list[str]:

@@ -39,7 +39,10 @@ def minutes_since_last_send(cfg: Dict[str, Any]) -> float | None:
 
 def should_skip_send(cfg: Dict[str, Any], *, slot: str = "") -> Tuple[bool, str]:
     """True if a digest was sent recently (same cooldown for all slots)."""
-    min_gap = float(cfg.get("digest_min_minutes_between_sends") or 90)
+    if (slot or "").strip() == "removed":
+        return False, ""
+    raw_gap = cfg.get("digest_min_minutes_between_sends")
+    min_gap = 90.0 if raw_gap is None else float(raw_gap)
     if min_gap <= 0:
         return False, ""
     ago = minutes_since_last_send(cfg)

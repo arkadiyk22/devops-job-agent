@@ -260,6 +260,9 @@ def build_google_browser_queries(cfg: Dict[str, Any]) -> List[str]:
     ats = cfg.get("ats_google_site_search")
     if isinstance(ats, dict) and ats.get("enabled", False):
         built = build_ats_google_site_queries(cfg)
+        posts_block = cfg.get("linkedin_posts")
+        if isinstance(posts_block, dict) and not posts_block.get("enabled", True):
+            built = [q for q in built if "linkedin.com/posts" not in q.lower()]
         cap = int(block.get("max_queries_per_run") or 0)
         if cap > 0:
             return built[:cap]

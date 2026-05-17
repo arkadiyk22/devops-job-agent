@@ -17,6 +17,7 @@ from job_agent.sources.google_site_ats import (
     _site_label_from_query,
     _split_title_company,
 )
+from job_agent.linkedin_og import is_linkedin_post_url, split_linkedin_google_result
 from job_agent.util import normalize_url
 
 _CAPTCHA_RE = re.compile(r"unusual traffic|captcha|sorry, we can't verify", re.I)
@@ -195,6 +196,16 @@ def fetch_google_web_browser(cfg: Dict[str, Any]) -> List[Job]:
                 seen.add(link_n)
                 title, company = _split_title_company(row.get("title") or "", row.get("snippet") or "", link_n)
                 loc = _guess_location(row.get("snippet") or "", q)
+                if is_linkedin_post_url(link_n):
+                    t2, c2, loc2 = split_linkedin_google_result(
+                        row.get("title") or "", row.get("snippet") or "", link_n
+                    )
+                    if t2:
+                        title = t2
+                    if c2:
+                        company = c2
+                    if loc2:
+                        loc = loc2
                 snippet = row.get("snippet") or ""
                 out.append(
                     Job(

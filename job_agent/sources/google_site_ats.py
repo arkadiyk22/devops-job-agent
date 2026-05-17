@@ -13,6 +13,7 @@ from job_agent.scoring import score_title
 from job_agent.serpapi_client import serpapi_request
 from job_agent.settings import get_setting
 from job_agent.sources.google_jobs import _is_no_jobs_for_query, _looks_configured
+from job_agent.linkedin_og import is_linkedin_post_url, split_linkedin_google_result
 from job_agent.util import normalize_url
 
 
@@ -66,6 +67,8 @@ def _site_label_from_query(q: str) -> str:
     if not m:
         return "ats"
     h = m.group(1).strip().lower()
+    if "linkedin.com/posts" in q.lower() or re.search(r"site:\s*[\w.]*linkedin\.com/posts", q, re.I):
+        return "linkedin_post"
     for name in ("comeet", "greenhouse", "workday", "lever", "workable", "smartrecruiters", "linkedin"):
         if name in h:
             return name
@@ -94,7 +97,7 @@ def _company_from_path(link: str) -> str:
     if "myworkdayjobs.com" in host and len(parts) >= 1:
         return parts[0].replace("-", " ").title()
     if "linkedin.com" in host:
-        if len(parts) >= 1 and parts[0] not in ("jobs", "job", "view"):
+        if len(parts) >= 1 and parts[0] not in ("jobs", "job", "view", "posts", "feed"):
             return parts[0].replace("-", " ").title()
     return ""
 
@@ -105,6 +108,12 @@ def _clean_organic_title(title: str) -> str:
 
 
 def _split_title_company(title: str, snippet: str, link: str) -> tuple[str, str]:
+    if is_linkedin_post_url(link) or (
+        "linkedin.com" in (link or "").lower() and " hiring " in f" {(title or '').lower()} "
+    ):
+        t, co, _loc = split_linkedin_google_result(title, snippet, link)
+        if t and co:
+            return _clean_organic_title(t), co[:120]
     raw = (title or "").strip()
     company = ""
     for sep in (" | ", " – ", " — "):
@@ -148,7 +157,11 @@ def _is_probable_job_url(link: str) -> bool:
     if "smartrecruiters.com" in low:
         return "/vacancy/" in path or "/job/" in path or re.search(r"/\d{7,}/", path) is not None
     if "linkedin.com" in low:
-        return "/jobs/view/" in path or re.search(r"/jobs/view/\d", low) is not None
+        if "/jobs/view/" in path or re.search(r"/jobs/view/\d", low):
+            return True
+        if is_linkedin_post_url(link):
+            return True
+        return False
     return False
 
 

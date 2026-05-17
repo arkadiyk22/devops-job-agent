@@ -7,9 +7,15 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 from job_agent.browser.session import open_linkedin_login, playwright_available, with_linkedin_context
 from job_agent.models import Job
+from job_agent.network import (
+    REACH_OUT_LINKEDIN_SOURCE,
+    linkedin_reach_out_snapshot_ok,
+    person_display_name,
+)
 from job_agent.scoring import score_title
 from job_agent.util import normalize_url
 
@@ -152,58 +158,184 @@ def _search_url_with_job_id(search_url: str, job_id: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(q)))
 
 
+_REACH_OUT_PRESENT_JS = """
+() => {
+  const isHiringBlock = (el) => {
+    const cls = String(el.className || '');
+    if (/hiring[-_]?team|hiringteam/i.test(cls)) return true;
+    const t = (el.innerText || '');
+    return /meet the hiring team|hiring team|צוות הגיוס|צוות גיוס/i.test(t) &&
+      !/people[-_]?who[-_]?can[-_]?help|people-who-can-help/i.test(cls);
+  };
+  const isReachOutBlock = (el) => {
+    if (isHiringBlock(el)) return false;
+    const cls = String(el.className || '');
+    if (/people[-_]?who[-_]?can[-_]?help|people-who-can-help/i.test(cls)) return true;
+    const t = (el.innerText || '');
+    return /people you can reach out to|in your network|אנשים ש|לפנות|ברשת שלך/i.test(t);
+  };
+  for (const el of document.querySelectorAll(
+    '[class*="job-details-people-who-can-help"], [class*="people-who-can-help"]'
+  )) {
+    if (isReachOutBlock(el)) return true;
+  }
+  return [...document.querySelectorAll('h2, h3, [role="heading"]')].some((el) => {
+    const t = (el.innerText || '').trim();
+    return /people you can reach out to|אנשים ש/i.test(t) && !/hiring team|צוות הגיוס/i.test(t);
+  });
+}
+"""
+
 _REACH_OUT_EXTRACT_JS = """
 () => {
   const people = [];
   const seen = new Set();
+  const isHiringBlock = (el) => {
+    const cls = String(el.className || '');
+    if (/hiring[-_]?team|hiringteam/i.test(cls)) return true;
+    const t = (el.innerText || '');
+    return /meet the hiring team|hiring team|צוות הגיוס|צוות גיוס/i.test(t) &&
+      !/people[-_]?who[-_]?can[-_]?help|people-who-can-help/i.test(cls);
+  };
+  const isReachOutBlock = (el) => {
+    if (isHiringBlock(el)) return false;
+    const cls = String(el.className || '');
+    if (/people[-_]?who[-_]?can[-_]?help|people-who-can-help/i.test(cls)) return true;
+    const t = (el.innerText || '');
+    return /people you can reach out to|in your network|אנשים ש|לפנות|ברשת שלך/i.test(t);
+  };
   const findReachOutRoot = () => {
-    const modal = document.querySelector('.artdeco-modal, [role="dialog"]');
-    if (modal) return modal;
-    const h = [...document.querySelectorAll('h2, h3')].find(el =>
-      /people you can reach out to|in your network/i.test((el.innerText || '').trim())
-    );
-    if (h) {
+    for (const modal of document.querySelectorAll('.artdeco-modal, [role="dialog"]')) {
+      const t = modal.innerText || '';
+      if (/meet the hiring team|hiring team|צוות הגיוס|job poster/i.test(t)) continue;
+      if (!/in your network|people you can reach out|ברשת|אנשים ש/i.test(t)) continue;
+      if (modal.querySelector('a[href*="/in/"]')) return modal;
+    }
+    for (const card of document.querySelectorAll(
+      '[class*="job-details-connections-card"], [class*="people-who-can-help__connections-card"]'
+    )) {
+      if (isReachOutBlock(card)) return card;
+    }
+    for (const card of document.querySelectorAll(
+      '[class*="job-details-people-who-can-help"], [class*="people-who-can-help"]'
+    )) {
+      if (isReachOutBlock(card)) return card;
+    }
+    const reachH = [...document.querySelectorAll('h2, h3, [role="heading"]')].find((el) => {
+      const t = (el.innerText || '').trim();
+      return /people you can reach out to|אנשים ש/i.test(t) && !/hiring team|צוות הגיוס/i.test(t);
+    });
+    if (reachH) {
       return (
-        h.closest('section') ||
-        h.closest('[class*="people-who-can-help"]') ||
-        h.closest('[class*="job-details-people"]') ||
-        h.parentElement?.parentElement ||
+        reachH.closest('[class*="people-who-can-help"]') ||
+        reachH.closest('section') ||
+        reachH.parentElement?.parentElement ||
         null
       );
     }
-    const card = document.querySelector(
-      '[class*="job-details-people-who-can-help"], [class*="people-who-can-help"]'
-    );
-    return card;
+    return null;
   };
-  const root = findReachOutRoot() || document;
-  const scoped = root !== document;
+  const anchorReachOutScope = (a) => {
+    const hiring = a.closest('[class*="hiring-team"], [class*="hiring_team"]');
+    if (hiring) return null;
+    const card = a.closest(
+      '[class*="people-who-can-help"], [class*="job-details-people-who-can-help"]'
+    );
+    if (card && isReachOutBlock(card)) return card;
+    const root = findReachOutRoot();
+    if (root && root.contains(a)) return root;
+    return null;
+  };
+  const root = findReachOutRoot();
+  if (!root) return [];
+  const pickFullName = (candidates) => {
+    for (const raw of candidates) {
+      const s = (raw || '').replace(/\\s+/g, ' ').trim();
+      const degAt = s.search(/\\s·\\s*\\d(?:st|nd|rd|th)\\b/i);
+      if (degAt > 0) {
+        let before = s.slice(0, degAt).replace(/\\s*is verified\\s*/gi, ' ').replace(/\\s*profile\\s*photo\\s*/gi, ' ');
+        before = before.replace(/\\s+/g, ' ').trim();
+        const words = before.split(' ').filter(Boolean);
+        if (words.length >= 4 && words.length % 2 === 0) {
+          const half = words.length / 2;
+          if (words.slice(0, half).join(' ').toLowerCase() === words.slice(half).join(' ').toLowerCase()) {
+            before = words.slice(0, half).join(' ');
+          }
+        }
+        const w2 = before.split(/\\s+/).filter(Boolean);
+        if (w2.length >= 3 && w2[0].toLowerCase() === w2[1].toLowerCase()) {
+          before = w2.slice(1).join(' ');
+        }
+        if (before.split(/\\s+/).length >= 2) return before;
+      }
+    }
+    let best = '';
+    let bestScore = -1;
+    for (const raw of candidates) {
+      let s = (raw || '').replace(/\\s+/g, ' ').trim();
+      if (!s) continue;
+      s = s.replace(/\\s*profile\\s*photo\\s*/gi, ' ').replace(/\\s+/g, ' ').trim();
+      s = s.replace(/^view\\s+/i, '').replace(/(?:'s|'s|’s)\\s+profile$/i, '').trim();
+      if (!s) continue;
+      s = s.split(' is verified')[0].trim();
+      const head = s.includes('·') ? s.split('·')[0].trim() : s;
+      if (!head || head.length > 80) continue;
+      if (/^\\d|linkedin/i.test(head)) continue;
+      const words = head.split(/\\s+/).filter(Boolean);
+      if (!words.length) continue;
+      const score = words.length * 100 + head.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = head;
+      }
+    }
+    return best;
+  };
   const parseAnchor = (a) => {
+    const scope = anchorReachOutScope(a);
+    if (!scope) return null;
     const href = (a.href || a.getAttribute('href') || '').split('?')[0];
     if (!href || seen.has(href) || !/linkedin\\.com\\/in\\//i.test(href)) return null;
     const blob = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (!blob || /^profile photo$/i.test(blob)) return null;
-    // Outside the reach-out block, keep only obvious 1st-degree rows.
-    if (!scoped && !/·\\s*1st\\b/i.test(blob) && !/\\b1st\\b/i.test(blob)) return null;
-    seen.add(href);
-    const img = a.querySelector('img[alt]');
-    let name = (img?.getAttribute('alt') || '').replace(/\\s*profile photo\\s*$/i, '').trim();
-    const nameSpan = a.querySelector('[class*="actor-name"], [class*="lockup__title"], strong, span[dir="ltr"]');
-    if (nameSpan) {
-      const t = (nameSpan.innerText || '').trim().split('\\n')[0].trim();
-      if (t && t.length > name.length) name = t;
+    const row =
+      a.closest('li.artdeco-list__item, li, div[class*="entity-result"], div[class*="lockup"]') || a.parentElement;
+    let bundleText = row ? (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+    let ctx = row ? row.parentElement : null;
+    for (let i = 0; i < 8 && ctx; i++) {
+      const t = (ctx.innerText || '').replace(/\\s+/g, ' ').trim();
+      if (/·\\s*\\d(?:st|nd|rd|th)\\b/i.test(t)) {
+        bundleText = t;
+        break;
+      }
+      ctx = ctx.parentElement;
     }
-    if (!name) {
-      const head = blob.split(' is verified')[0].split('·')[0].trim();
-      name = head.slice(0, 80);
-    }
+    if (/school alumni/i.test(bundleText)) return null;
+    if (!/·\\s*1st\\b/i.test(bundleText)) return null;
+    const rowText = bundleText;
     const aria = (a.getAttribute('aria-label') || '').trim();
-    if (aria && aria.length > name.length && aria.length < 80) name = aria;
-    if (!name || name.length > 80) return null;
+    const imgAlt = (a.querySelector('img[alt]')?.getAttribute('alt') || '').trim();
+    const candidates = [];
+    if (row) {
+      if (rowText) candidates.push(rowText);
+      row.querySelectorAll(
+        '[class*="lockup__title"], [class*="actor-name"], [class*="name"], strong, span[dir="ltr"]'
+      ).forEach((el) => {
+        const t = (el.innerText || '').trim().split('\\n')[0].trim();
+        if (t) candidates.push(t);
+      });
+    }
+    candidates.push(aria, blob, imgAlt);
+    if (!candidates.some((c) => (c || '').trim())) return null;
+    seen.add(href);
+    const name = pickFullName(candidates);
+    if (!name) return null;
+    const parts = name.split(/\\s+/).filter(Boolean);
+    const first_name = parts[0] || '';
+    const last_name = parts.length > 1 ? parts.slice(1).join(' ') : '';
     let role = '';
-    const m = blob.match(/·\\s*\\d+(?:st|nd|rd|th)\\s*(.+)$/i);
-    if (m) role = m[1].trim().slice(0, 120);
-    return { name, role, profile_url: href };
+    const rm = (rowText || blob).match(/·\\s*1st\\s*(.+)$/i);
+    if (rm) role = rm[1].trim().replace(/\\s+Message\\s*$/i, '').slice(0, 120);
+    return { name, first_name, last_name, role, profile_url: href };
   };
   root.querySelectorAll('a[href*="/in/"]').forEach(a => {
     const row = parseAnchor(a);
@@ -214,27 +346,53 @@ _REACH_OUT_EXTRACT_JS = """
 """
 
 
-def _wait_for_reach_out_section(page, timeout_ms: int = 12_000) -> bool:
+def _wait_for_reach_out_section(page, timeout_ms: int = 18_000) -> bool:
     try:
-        page.wait_for_selector(
-            'h2:has-text("People you can reach out to"), '
-            'h3:has-text("People you can reach out to"), '
-            '[class*="people-who-can-help"]',
-            timeout=timeout_ms,
-        )
+        page.wait_for_function(_REACH_OUT_PRESENT_JS, timeout=timeout_ms)
         return True
     except Exception:
         return False
 
 
+def _scroll_reach_out_into_view(page) -> None:
+    try:
+        page.evaluate(
+            """
+            () => {
+              const pick = () => {
+                for (const el of document.querySelectorAll(
+                  '[class*="people-who-can-help"], [class*="job-details-people-who-can-help"]'
+                )) {
+                  const cls = String(el.className || '');
+                  if (/hiring[-_]?team/i.test(cls)) continue;
+                  if (/people[-_]?who[-_]?can[-_]?help|people-who-can-help/i.test(cls)) return el;
+                }
+                return [...document.querySelectorAll('h2, h3')].find((el) =>
+                  /people you can reach out to|אנשים ש/i.test(el.innerText || '')
+                );
+              };
+              const el = pick();
+              if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }
+            """
+        )
+    except Exception:
+        pass
+
+
 def _click_reach_out_show_all(page) -> None:
     try:
+        block = page.locator(
+            '[class*="job-details-connections-card"], [class*="people-who-can-help__connections-card"]'
+        ).first
         for sel in (
             "button.job-details-people-who-can-help__connections-card-summary-card-action",
             'button:has-text("Show all")',
+            'button:has-text("הצג הכל")',
             'a:has-text("Show all")',
+            'a:has-text("הצג הכל")',
         ):
-            btn = page.locator(sel).first
+            btn = block.locator(sel).first if block.count() > 0 else page.locator(sel).first
             if btn.count() > 0 and btn.is_visible():
                 btn.click(timeout=5000)
                 time.sleep(2.0)
@@ -271,14 +429,15 @@ def _scroll_job_details_pane(page) -> None:
 
 def _extract_reach_out_people(page) -> List[Dict[str, str]]:
     try:
-        _wait_for_reach_out_section(page, timeout_ms=10_000)
+        found = _wait_for_reach_out_section(page, timeout_ms=18_000)
         _scroll_job_details_pane(page)
-        time.sleep(0.8)
+        _scroll_reach_out_into_view(page)
+        time.sleep(1.2 if found else 2.0)
         raw = page.evaluate(_REACH_OUT_EXTRACT_JS)
         # LinkedIn usually shows 1–3 faces inline; full list is behind «Show all».
-        if page.locator('h2:has-text("People you can reach out to"), h3:has-text("People you can reach out to")').count():
+        if found or (isinstance(raw, list) and len(raw) > 0):
             _click_reach_out_show_all(page)
-            time.sleep(1.5)
+            time.sleep(2.5)
             expanded = page.evaluate(_REACH_OUT_EXTRACT_JS)
             if isinstance(expanded, list) and len(expanded) > len(raw or []):
                 raw = expanded
@@ -290,15 +449,269 @@ def _extract_reach_out_people(page) -> List[Dict[str, str]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip()
-        if not name:
+        full = person_display_name(
+            {
+                "name": str(item.get("name") or ""),
+                "first_name": str(item.get("first_name") or ""),
+                "last_name": str(item.get("last_name") or ""),
+            }
+        )
+        if not full:
             continue
         out.append(
             {
-                "name": name[:80],
+                "name": full[:80],
+                "first_name": str(item.get("first_name") or "").strip()[:40],
+                "last_name": str(item.get("last_name") or "").strip()[:40],
                 "role": str(item.get("role") or "").strip()[:120],
                 "profile_url": str(item.get("profile_url") or "").strip(),
             }
+        )
+    return out
+
+
+_JOB_VIEW_DETAIL_JS = """
+() => {
+  const pickText = (selectors) => {
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (t) return t.split('·')[0].trim();
+    }
+    return '';
+  };
+  let title = pickText([
+    'h1.job-details-jobs-unified-top-card__job-title',
+    'h1.top-card-layout__title',
+    'h1.t-24',
+    'h1'
+  ]);
+  let company = pickText([
+    '.job-details-jobs-unified-top-card__company-name a',
+    '.topcard__org-name-link',
+    'a[data-tracking-control-name="public_jobs_topcard-org-name"]',
+    '.jobs-unified-top-card__company-name a',
+    '.job-details-jobs-unified-top-card__company-name'
+  ]);
+  let location = pickText([
+    '.job-details-jobs-unified-top-card__bullet',
+    '.topcard__flavor--bullet',
+    '.jobs-unified-top-card__bullet',
+    '.job-details-jobs-unified-top-card__primary-description-container'
+  ]);
+  const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+  for (const node of scripts) {
+    try {
+      const data = JSON.parse(node.textContent || '');
+      const items = Array.isArray(data) ? data : [data];
+      for (const d of items) {
+        if (!d || (d['@type'] !== 'JobPosting' && !(d['@type'] || '').includes('JobPosting'))) continue;
+        title = title || (d.title || d.name || '').trim();
+        const hirer = d.hiringOrganization || d.employer;
+        if (hirer && typeof hirer === 'object') company = company || (hirer.name || '').trim();
+        const loc = d.jobLocation;
+        if (loc) {
+          if (typeof loc === 'string') location = location || loc.trim();
+          else if (Array.isArray(loc) && loc[0] && loc[0].address) {
+            const a = loc[0].address;
+            location = location || [a.addressLocality, a.addressRegion, a.addressCountry].filter(Boolean).join(', ');
+          } else if (loc.address) {
+            const a = loc.address;
+            location = location || [a.addressLocality, a.addressRegion, a.addressCountry].filter(Boolean).join(', ');
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+  const ogTitle = (document.querySelector('meta[property="og:title"]') || {}).content || '';
+  if (ogTitle && !title) {
+    const m = ogTitle.match(/^(.+?)\\s+hiring\\s+(.+?)\\s+in\\s+(.+?)\\s*\\|/i);
+    if (m) {
+      company = company || m[1].trim();
+      title = title || m[2].trim();
+      location = location || m[3].trim();
+    }
+  }
+  if (!location) {
+    const locRe = /Israel|ישראל|Remote|Hybrid|Tel Aviv|Herzliya|Haifa|Jerusalem/i;
+    const nodes = document.querySelectorAll(
+      '.topcard__flavor, .jobs-unified-top-card__bullet, .job-details-jobs-unified-top-card__primary-description-container span'
+    );
+    for (const el of nodes) {
+      const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+      if (t && t.length < 100 && locRe.test(t)) {
+        location = t;
+        break;
+      }
+    }
+  }
+  return { title, company, location };
+}
+"""
+
+
+_OG_TITLE_RE = re.compile(
+    r'property="og:title"\s+content="([^"]+)"',
+    re.I,
+)
+
+
+def _parse_linkedin_og_title(og_title: str) -> Dict[str, str]:
+    from job_agent.linkedin_og import parse_linkedin_hiring_title
+
+    return parse_linkedin_hiring_title(og_title)
+
+
+def fetch_linkedin_job_details_http(link: str) -> Dict[str, str]:
+    """Fetch job title/company/location from public LinkedIn HTML (no browser)."""
+    from job_agent.linkedin_og import fetch_linkedin_og_details_http
+
+    return fetch_linkedin_og_details_http(link)
+
+
+def _infer_source_from_link(link: str) -> str:
+    low = (link or "").lower()
+    if "linkedin.com/jobs" in low:
+        return "linkedin_browser"
+    if "boards.greenhouse.io" in low:
+        return "greenhouse"
+    if "jobs.lever.co" in low or "lever.co" in low:
+        return "lever"
+    return ""
+
+
+def fetch_linkedin_job_details(page, view_url: str, cfg: Dict[str, Any] | None = None) -> Dict[str, str]:
+    """Read title / company / location from a LinkedIn job (view page or jobs search split)."""
+    key = normalize_url(view_url.split("?")[0])
+    jid = _job_id_from_href(view_url)
+    out: Dict[str, str] = {}
+    try:
+        page.goto(view_url.split("?")[0], wait_until="domcontentloaded", timeout=90_000)
+        try:
+            page.wait_for_selector(
+                'h1, meta[property="og:title"], script[type="application/ld+json"], a[href*="/jobs/view/"]',
+                timeout=15_000,
+            )
+        except Exception:
+            pass
+        time.sleep(1.5)
+        if "authwall" not in (page.url or "").lower():
+            raw = page.evaluate(_JOB_VIEW_DETAIL_JS)
+            if isinstance(raw, dict):
+                out = {
+                    "title": str(raw.get("title") or "").strip()[:300],
+                    "company": str(raw.get("company") or "").strip()[:120],
+                    "location": str(raw.get("location") or "").strip()[:120],
+                }
+    except Exception:
+        pass
+
+    if (out.get("title") and out.get("company")) or not jid or not cfg:
+        return out
+
+    # Fallback: open the job in the jobs search split pane (same UI as main fetch).
+    try:
+        search_url = build_linkedin_jobs_search_url(cfg)
+        split_url = _search_url_with_job_id(search_url, jid)
+        _dismiss_modal(page)
+        page.goto(split_url, wait_until="domcontentloaded", timeout=90_000)
+        time.sleep(1.2)
+        for card in _extract_cards_from_page(page):
+            if normalize_url(card.get("href") or "") == key:
+                return {
+                    "title": card.get("title") or out.get("title") or "",
+                    "company": card.get("company") or out.get("company") or "",
+                    "location": card.get("location") or out.get("location") or "",
+                }
+    except Exception:
+        pass
+    return out
+
+
+def _apply_details_to_removed_record(rec: Dict[str, Any], details: Dict[str, str], link: str) -> bool:
+    if not details:
+        return False
+    if details.get("title"):
+        rec["title"] = details["title"]
+    if details.get("company"):
+        rec["company"] = details["company"]
+    if details.get("location"):
+        rec["location"] = details["location"]
+    if details.get("source") and not rec.get("source"):
+        rec["source"] = details["source"]
+    return bool(details.get("title") or details.get("company"))
+
+
+def enrich_removed_records(records: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Fill missing title/company/location for hidden jobs (legacy link-only rows)."""
+    from job_agent.ignore_store import record_needs_detail, save_all_removed_records
+    from job_agent.job_page_details import fetch_job_page_details_http
+
+    if not records:
+        return records
+    by_link = {normalize_url(str(r.get("link") or "")): dict(r) for r in records if r.get("link")}
+    http_enriched = 0
+    for link, rec in list(by_link.items()):
+        if not record_needs_detail(rec):
+            continue
+        try:
+            details = fetch_job_page_details_http(link)
+            if _apply_details_to_removed_record(rec, details, link):
+                http_enriched += 1
+                print(
+                    f"Removed job details (HTTP): {rec.get('company') or '?'} — {(rec.get('title') or '')[:60]}",
+                    file=sys.stderr,
+                )
+            by_link[link] = rec
+        except Exception as exc:
+            print(f"Removed job HTTP enrich skip {link}: {exc}", file=sys.stderr)
+
+    need_browser = [r for r in by_link.values() if record_needs_detail(r) and "linkedin.com/jobs" in str(r.get("link") or "").lower()]
+    browser_enriched = 0
+    if need_browser and playwright_available():
+        pause = float(_jobs_search_block(cfg).get("reach_out_pause_seconds") or 1.8)
+        pw, context = with_linkedin_context(cfg)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            for rec in need_browser:
+                link = str(rec.get("link") or "")
+                try:
+                    details = fetch_linkedin_job_details_http(link)
+                    if not (details.get("title") and details.get("company")):
+                        _dismiss_modal(page)
+                        details = fetch_linkedin_job_details(page, link, cfg)
+                    elif not details.get("location"):
+                        extra = fetch_linkedin_job_details(page, link, cfg)
+                        details["location"] = extra.get("location") or details.get("location") or ""
+                    if _apply_details_to_removed_record(rec, details, link):
+                        browser_enriched += 1
+                        print(
+                            f"Removed job details (browser): {rec.get('company') or '?'} — "
+                            f"{(rec.get('title') or '')[:60]}",
+                            file=sys.stderr,
+                        )
+                    by_link[link] = rec
+                    time.sleep(pause)
+                except Exception as exc:
+                    print(f"Removed job enrich skip {link}: {exc}", file=sys.stderr)
+        finally:
+            context.close()
+            pw.stop()
+    elif need_browser:
+        print("Removed jobs: LinkedIn rows still missing details (Playwright not installed).", file=sys.stderr)
+
+    out = list(by_link.values())
+    total = http_enriched + browser_enriched
+    if total or any(record_needs_detail(r) for r in out):
+        save_all_removed_records(out, cfg)
+    if total:
+        print(f"Removed jobs: enriched {total} row(s) ({http_enriched} HTTP, {browser_enriched} browser).", file=sys.stderr)
+    elif any(record_needs_detail(r) for r in out):
+        print(
+            "Removed jobs: some rows still missing title/company. "
+            "Re-remove from a fresh digest to save a full snapshot, or edit ~/.job-agent/digest_ignore_links.json.",
+            file=sys.stderr,
         )
     return out
 
@@ -322,8 +735,7 @@ def enrich_reach_out_for_jobs(
         if job.source != "linkedin_browser":
             continue
         raw = job.raw if isinstance(job.raw, dict) else {}
-        scraped = raw.get("reach_out_people")
-        if isinstance(scraped, list) and scraped:
+        if linkedin_reach_out_snapshot_ok(raw):
             continue
         need.append(job)
     if not need:
@@ -372,6 +784,8 @@ def _enrich_jobs_reach_out_people(
     if cap == 0:
         return
     pause = float(js.get("reach_out_pause_seconds") or 1.8)
+    if for_email:
+        pause = max(pause, 2.5)
     with_people = 0
     targets = jobs[:cap]
     for job in targets:
@@ -398,9 +812,19 @@ def _enrich_jobs_reach_out_people(
                 job.raw = {}
             job.raw["reach_out_people"] = people
             if people:
+                job.raw["reach_out_source"] = REACH_OUT_LINKEDIN_SOURCE
+            else:
+                job.raw.pop("reach_out_source", None)
+            if people:
                 with_people += 1
                 print(
                     f"LinkedIn reach-out: {len(people)} at {job.company or '?'} — {job.title[:50]}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"LinkedIn reach-out: 0 names for job {jid} "
+                    f"({job.company or '?'}) — section missing or no 1st-degree matches",
                     file=sys.stderr,
                 )
             _dismiss_modal(page)

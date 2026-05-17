@@ -6,11 +6,23 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set
 
 import pandas as pd
 
+from job_agent.digest_remove import (
+    build_apply_yes_url,
+    build_remove_yes_url,
+    build_restore_url,
+    build_set_status_url,
+    digest_remove_enabled,
+    job_tracker_apply_enabled,
+)
+from job_agent.digest_search_profile import build_search_profile_df
+from job_agent.ignore_store import merge_ignore_links
+DigestTableAction = Literal["remove", "restore"]
 from job_agent.settings import get_setting
+from job_agent.util import normalize_url
 
 # Columns shown in the HTML email jobs table (no Recommended Search, Posted Date, or Score).
 _EMAIL_JOB_COLUMNS: Sequence[str] = (
@@ -22,6 +34,20 @@ _EMAIL_JOB_COLUMNS: Sequence[str] = (
     "Location",
 )
 
+# Removed-jobs subsection (and removed-only email): no Network column.
+_REMOVED_JOBS_EMAIL_COLUMNS: Sequence[str] = tuple(
+    c for c in _EMAIL_JOB_COLUMNS if c != "Network"
+)
+
+# Same columns as the digest email jobs table (shared with job_tracker.xlsx).
+DIGEST_JOB_TABLE_COLUMNS: Sequence[str] = _EMAIL_JOB_COLUMNS
+
+TRACKER_COL_LAST_UPDATED = "Last updated"
+JOB_TRACKER_EXTRA_COLUMNS: Sequence[str] = (TRACKER_COL_LAST_UPDATED, "Status")
+
+# Shown in digest email after core job columns (before Remove).
+DIGEST_TRACKER_EMAIL_COLUMNS: Sequence[str] = (TRACKER_COL_LAST_UPDATED, "Status")
+
 _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Job Title": "Job title",
     "Company": "Company",
@@ -29,6 +55,10 @@ _DEFAULT_EMAIL_HEADERS: Dict[str, str] = {
     "Link": "Job link / URL",
     "Source": "Source",
     "Location": "Location",
+    "Remove": "Remove",
+    "Restore": "Restore",
+    TRACKER_COL_LAST_UPDATED: "Last updated",
+    "Status": "Status",
 }
 
 
@@ -56,28 +86,109 @@ def _jobs_email_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     headers = _email_table_headers(cfg)
     excel = cfg.get("excel_column_labels")
     if isinstance(excel, dict):
-        for k in _EMAIL_JOB_COLUMNS:
+        for k in list(_EMAIL_JOB_COLUMNS) + list(DIGEST_TRACKER_EMAIL_COLUMNS):
             if k in excel and str(excel[k]).strip():
                 headers[k] = str(excel[k]).strip()
     return headers
+
+
+def _status_cell_html(link: str, current: str, cfg: Dict[str, Any]) -> str:
+    from job_agent.job_tracker_excel import allowed_status_values, status_links_enabled
+
+    esc = html.escape
+    if not link:
+        return "<td>—</td>"
+    current_norm = (current or "").strip()
+    parts = [f"<strong>{esc(current_norm or 'New')}</strong>"]
+    if status_links_enabled(cfg) and digest_remove_enabled(cfg):
+        choices = allowed_status_values(cfg)
+        links: List[str] = []
+        for label in choices:
+            if label.lower() == current_norm.lower():
+                continue
+            url = build_set_status_url(link, label, cfg)
+            links.append(f'<a href="{esc(url, quote=True)}" style="font-size:12px;">{esc(label)}</a>')
+        if links:
+            parts.append(
+                '<div style="margin-top:4px;font-size:12px;color:#444;">'
+                + " · ".join(links)
+                + "</div>"
+            )
+    return f'<td style="font-size:13px;vertical-align:top;">{"".join(parts)}</td>'
+
+
+def _apply_yes_cell_html(link: str, cfg: Dict[str, Any]) -> str:
+    esc = html.escape
+    if not job_tracker_apply_enabled(cfg) or not link:
+        return '<td style="text-align:center;">—</td>'
+    url = build_apply_yes_url(link, cfg)
+    return (
+        '<td style="text-align:center;white-space:nowrap;">'
+        f'<a href="{esc(url, quote=True)}" style="font-size:13px;">Yes</a>'
+        "</td>"
+    )
+
+
+def _action_cell_html(link: str, cfg: Dict[str, Any], action: DigestTableAction) -> str:
+    esc = html.escape
+    if not digest_remove_enabled(cfg) or not link:
+        return '<td style="text-align:center;">—</td>'
+    if action == "remove":
+        url = build_remove_yes_url(link, cfg)
+        label = "Yes"
+    else:
+        url = build_restore_url(link, cfg)
+        label = "Restore"
+    return (
+        '<td style="text-align:center;white-space:nowrap;">'
+        f'<a href="{esc(url, quote=True)}" style="font-size:13px;">{esc(label)}</a>'
+        "</td>"
+    )
 
 
 def _df_to_html_table(
     df: pd.DataFrame,
     columns: Sequence[str],
     header_map: Dict[str, str],
+    *,
+    cfg: Dict[str, Any] | None = None,
+    table_action: DigestTableAction | None = "remove",
 ) -> str:
     if df.empty:
         return "<p><em>No rows.</em></p>"
-    use = [c for c in columns if c in df.columns]
+    action_col = "Restore" if table_action == "restore" else "Remove"
+    use = [
+        c
+        for c in columns
+        if c in df.columns
+        or (table_action and c == action_col)
+        or (c == TRACKER_COL_LAST_UPDATED and job_tracker_apply_enabled(cfg))
+        or (c == "Status" and job_tracker_apply_enabled(cfg))
+    ]
     if not use:
         return "<p><em>No columns.</em></p>"
     esc = html.escape
+    cfg = cfg or {}
     ths = "".join(f"<th>{esc(header_map.get(c, c))}</th>" for c in use)
     trs: List[str] = []
     for _, row in df.iterrows():
         cells = []
+        link_val = str(row.get("Link", "") or "")
         for c in use:
+            if c == TRACKER_COL_LAST_UPDATED and job_tracker_apply_enabled(cfg):
+                applied = str(row.get(TRACKER_COL_LAST_UPDATED, "") or "").strip()
+                if applied:
+                    cells.append(f"<td style=\"white-space:nowrap;\">{esc(applied)}</td>")
+                else:
+                    cells.append(_apply_yes_cell_html(link_val, cfg))
+                continue
+            if c == "Status" and job_tracker_apply_enabled(cfg):
+                cur = str(row.get("Status", "") or "").strip()
+                cells.append(_status_cell_html(link_val, cur, cfg))
+                continue
+            if c in ("Remove", "Restore") and table_action:
+                cells.append(_action_cell_html(link_val, cfg, table_action))
+                continue
             val = row.get(c, "")
             s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
             if c == "Link" and s.startswith("http"):
@@ -208,6 +319,40 @@ def _contacts_html_table(df: pd.DataFrame) -> str:
     )
 
 
+def _include_removed_table_in_digest(cfg: Dict[str, Any], table_action: DigestTableAction | None) -> bool:
+    if table_action == "restore":
+        return False
+    if not digest_remove_enabled(cfg):
+        return False
+    if "digest_email_include_removed_table" in cfg:
+        return bool(cfg.get("digest_email_include_removed_table"))
+    return True
+
+
+def _removed_jobs_email_block(
+    removed_jobs_df: pd.DataFrame,
+    cfg: Dict[str, Any],
+    headers: Dict[str, str],
+) -> str:
+    if removed_jobs_df is None or removed_jobs_df.empty:
+        return ""
+    restore_cols = [c for c in _REMOVED_JOBS_EMAIL_COLUMNS if c in removed_jobs_df.columns] + ["Restore"]
+    table = _df_to_html_table(
+        removed_jobs_df,
+        restore_cols,
+        headers,
+        cfg=cfg,
+        table_action="restore",
+    )
+    return (
+        "<h2 style=\"font-family:sans-serif;\">Removed jobs</h2>"
+        "<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">"
+        "Hidden from future digests. Click <strong>Restore</strong> to bring a job back."
+        "</p>"
+        f"{table}"
+    )
+
+
 def _build_digest_html(
     jobs_df: pd.DataFrame,
     contacts_df: pd.DataFrame,
@@ -217,56 +362,64 @@ def _build_digest_html(
     digest_by_source_df: pd.DataFrame,
     *,
     digest_note: str = "",
+    table_action: DigestTableAction | None = "remove",
+    removed_jobs_df: Optional[pd.DataFrame] = None,
 ) -> str:
     # Keep canonical column names (Link, etc.); excel_column_labels is for Excel sheets
     # and for <th> text here only — renaming the frame would drop the Link column.
     headers = _jobs_email_headers(cfg)
-    intro = (
-        "<p style=\"font-family:sans-serif;font-size:14px;\">"
-        "DevOps leadership roles (aggregated from configured sources). "
-        "Jobs are listed in <strong>relevance order</strong> (title match to your scoring rules in config). "
-        "<strong>Your connections at this company</strong> = LinkedIn «People you can reach out to» "
-        "(1st-degree at that employer), or matches from your Connections.csv export if configured. "
-        "Empty if LinkedIn shows no section, scrape failed, or you have not exported Connections.csv."
-        "</p>"
-    )
+    intro = ""
+    custom_intro = cfg.get("digest_email_intro_html")
+    if isinstance(custom_intro, str) and custom_intro.strip():
+        intro = f"<p style=\"font-family:sans-serif;font-size:14px;\">{custom_intro.strip()}</p>"
     if digest_note.strip():
         intro += (
-            f"<p style=\"font-family:sans-serif;font-size:13px;color:#444;\">"
+            f"<p style=\"font-family:sans-serif;font-size:14px;\">"
             f"{html.escape(digest_note.strip())}</p>"
         )
     only_new = bool(cfg.get("digest_email_only_new", False))
-    cap_fetch = (
-        "Fetched = jobs returned from that site after source-specific title/role filters (before Israel location filter). "
-        "Unique added = how many job URLs were new to this run's combined list (dedupe across sites in one run). "
-    )
-    if only_new:
-        cap_fetch += "The jobs table lists only URLs not sent in a previous digest."
-    else:
-        cap_fetch += "The jobs table lists all stored matches from your search (repeat listings included each digest)."
-    if cfg.get("location_hint_strict_location_or_title") and cfg.get("filter_jobs_by_location_hint"):
-        cap_fetch += (
-            " **Israel (strict):** a location alias must appear in the job **title or location** line "
-            "(not company name or job description alone), so US-only Greenhouse rows are dropped."
+    search_block = ""
+    if table_action != "restore":
+        profile_df = build_search_profile_df(cfg)
+        if not profile_df.empty:
+            search_block = _stats_block_html("Search profile", profile_df, "")
+    fetch_block = ""
+    if table_action != "restore" and fetch_stats_df is not None and not fetch_stats_df.empty:
+        fetch_block = _stats_block_html(
+            "Sources checked (this run)",
+            fetch_stats_df,
+            "",
         )
-    fetch_block = _stats_block_html(
-        "Sources checked (this run)",
-        fetch_stats_df,
-        cap_fetch,
+    if table_action == "restore":
+        jobs_heading = "Removed jobs"
+    else:
+        jobs_heading = "New jobs" if only_new else "Jobs in this digest"
+    action_col = "Restore" if table_action == "restore" else "Remove"
+    email_cols = list(
+        _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
     )
-    jobs_heading = "New jobs" if only_new else "Jobs in this digest"
-    src_heading = "New jobs in this email (by source)" if only_new else "Jobs in this digest (by source)"
-    digest_src_block = _stats_block_html(
-        src_heading,
-        digest_by_source_df,
-        "Source is the internal job id (e.g. greenhouse:duolingo). Counts match the jobs table below.",
+    if table_action != "restore" and job_tracker_apply_enabled(cfg):
+        email_cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS]
+    email_cols += [action_col] if digest_remove_enabled(cfg) and table_action else []
+    jobs_table = _df_to_html_table(
+        jobs_df,
+        email_cols,
+        headers,
+        cfg=cfg,
+        table_action=table_action,
     )
-    jobs_table = _df_to_html_table(jobs_df, _EMAIL_JOB_COLUMNS, headers)
+    removed_block = ""
+    if _include_removed_table_in_digest(cfg, table_action):
+        rdf = removed_jobs_df if removed_jobs_df is not None else pd.DataFrame()
+        removed_block = _removed_jobs_email_block(rdf, cfg, headers)
+    jobs_block = (
+        f"<h2 style=\"font-family:sans-serif;\">{html.escape(jobs_heading)}</h2>{jobs_table}"
+    )
     network_block = _network_html_table(network_df)
     contacts_block = _contacts_html_table(contacts_df)
     return (
         "<html><body>"
-        f"{intro}{fetch_block}{digest_src_block}<h2 style=\"font-family:sans-serif;\">{html.escape(jobs_heading)}</h2>{jobs_table}"
+        f"{intro}{jobs_block}{removed_block}{search_block}{fetch_block}"
         f"{network_block}{contacts_block}"
         "</body></html>"
     )
@@ -279,24 +432,55 @@ def _build_digest_plain(
     fetch_stats_df: pd.DataFrame,
     digest_by_source_df: pd.DataFrame,
     cfg: Dict[str, Any] | None = None,
+    table_action: DigestTableAction | None = "remove",
+    removed_jobs_df: Optional[pd.DataFrame] = None,
 ) -> str:
     lines: List[str] = [
         "DevOps leadership digest",
         "",
     ]
-    lines += _stats_block_plain("Sources checked (this run):", fetch_stats_df)
-    only_new = bool((cfg or {}).get("digest_email_only_new", False))
-    src_heading = "New jobs in this email (by source):" if only_new else "Jobs in this digest (by source):"
-    lines += _stats_block_plain(src_heading, digest_by_source_df)
     lines += [
-        "Jobs (relevance order — see config scoring; no score column in this mail):",
+        "Jobs (sorted by company name):",
         "",
     ]
-    cols = [c for c in _EMAIL_JOB_COLUMNS if c in jobs_df.columns]
+    job_cols = _REMOVED_JOBS_EMAIL_COLUMNS if table_action == "restore" else _EMAIL_JOB_COLUMNS
+    cols = [c for c in job_cols if c in jobs_df.columns]
+    if table_action != "restore" and job_tracker_apply_enabled(cfg or {}):
+        cols += [c for c in DIGEST_TRACKER_EMAIL_COLUMNS if c in jobs_df.columns]
     for _, row in jobs_df.iterrows():
         parts = [f"{c}: {row.get(c, '')}" for c in cols]
+        link = str(row.get("Link", "") or "")
+        if (
+            job_tracker_apply_enabled(cfg or {})
+            and link
+            and table_action != "restore"
+            and not str(row.get(TRACKER_COL_LAST_UPDATED, "") or "").strip()
+        ):
+            parts.append(f"Last updated: Yes (mark applied) — {build_apply_yes_url(link, cfg or {})}")
+        if digest_remove_enabled(cfg or {}) and link and table_action == "remove":
+            parts.append(f"Remove: Yes — {build_remove_yes_url(link, cfg or {})}")
+        elif digest_remove_enabled(cfg or {}) and link and table_action == "restore":
+            parts.append(f"Restore — {build_restore_url(link, cfg or {})}")
         lines.append(" | ".join(parts))
         lines.append("")
+    cfg_eff = cfg or {}
+    if _include_removed_table_in_digest(cfg_eff, table_action) and removed_jobs_df is not None and not removed_jobs_df.empty:
+        lines.append("Removed jobs (click Restore in HTML mail):")
+        lines.append("")
+        rcols = [c for c in _REMOVED_JOBS_EMAIL_COLUMNS if c in removed_jobs_df.columns]
+        for _, row in removed_jobs_df.iterrows():
+            parts = [f"{c}: {row.get(c, '')}" for c in rcols]
+            link = str(row.get("Link", "") or "")
+            if digest_remove_enabled(cfg_eff) and link:
+                parts.append(f"Restore — {build_restore_url(link, cfg_eff)}")
+            lines.append(" | ".join(parts))
+            lines.append("")
+    if table_action != "restore":
+        profile_df = build_search_profile_df(cfg_eff)
+        if not profile_df.empty:
+            lines += _stats_block_plain("Search profile:", profile_df)
+    if table_action != "restore" and fetch_stats_df is not None and not fetch_stats_df.empty:
+        lines += _stats_block_plain("Sources checked (this run):", fetch_stats_df)
     if not network_df.empty:
         lines.append("Your network at these employers (from LinkedIn connections export):")
         for _, row in network_df.iterrows():
@@ -308,6 +492,23 @@ def _build_digest_plain(
             lines.append(str(dict(row)))
             lines.append("")
     return "\n".join(lines).strip()
+
+
+def _sort_digest_jobs_by_company(jobs_df: pd.DataFrame) -> pd.DataFrame:
+    if jobs_df.empty or "Company" not in jobs_df.columns:
+        return jobs_df
+    by = ["Company"]
+    if "Job Title" in jobs_df.columns:
+        by.append("Job Title")
+    return (
+        jobs_df.sort_values(
+            by,
+            key=lambda col: col.astype(str).str.strip().str.casefold(),
+            ascending=True,
+            na_position="last",
+        )
+        .reset_index(drop=True)
+    )
 
 
 def save_excel(
@@ -352,12 +553,12 @@ def send_digest_email(
     attach_excel: bool = False,
     excel_path: Optional[Path] = None,
     subject: Optional[str] = None,
+    table_action: DigestTableAction | None = "remove",
+    removed_jobs_df: Optional[pd.DataFrame] = None,
 ) -> None:
     """Send multipart digest: plain text + HTML table in body; optional .xlsx attachment."""
     cfg = cfg or {}
-    jobs_df = jobs_df.copy()
-    if not jobs_df.empty and "Score" in jobs_df.columns:
-        jobs_df = jobs_df.sort_values("Score", ascending=False).reset_index(drop=True)
+    jobs_df = _sort_digest_jobs_by_company(jobs_df.copy())
     net = network_df if network_df is not None else pd.DataFrame()
     fstats = fetch_stats_df if fetch_stats_df is not None else pd.DataFrame()
     dsrc = digest_by_source_df if digest_by_source_df is not None else pd.DataFrame()
@@ -377,10 +578,23 @@ def send_digest_email(
     if not display:
         display = "Job Agent"
 
-    plain = _build_digest_plain(jobs_df, contacts_df, net, fstats, dsrc, cfg)
+    removed = removed_jobs_df if removed_jobs_df is not None else pd.DataFrame()
+    plain = _build_digest_plain(
+        jobs_df, contacts_df, net, fstats, dsrc, cfg, table_action=table_action, removed_jobs_df=removed
+    )
     if digest_note.strip():
         plain = f"{digest_note.strip()}\n\n{plain}"
-    html_body = _build_digest_html(jobs_df, contacts_df, net, cfg, fstats, dsrc, digest_note=digest_note)
+    html_body = _build_digest_html(
+        jobs_df,
+        contacts_df,
+        net,
+        cfg,
+        fstats,
+        dsrc,
+        digest_note=digest_note,
+        table_action=table_action,
+        removed_jobs_df=removed,
+    )
 
     msg = EmailMessage()
     msg["Subject"] = (subject or "").strip() or "DevOps Manager/Director roles — digest"

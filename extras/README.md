@@ -20,6 +20,29 @@ playwright install chromium
 python3 run.py --linkedin-login
 ```
 
+### Remove column in digest email (hide jobs)
+
+Each digest row has **Remove: Yes** — click to hide that job from future digests and fetches.
+
+List hidden jobs and restore:
+
+```bash
+python3 run.py --send-removed-email
+```
+
+The link opens `http://127.0.0.1:8791/remove?...` on your Mac — keep the remove server running:
+
+```bash
+# foreground (testing)
+python3 run.py --digest-remove-server
+
+# or install LaunchAgent (recommended)
+cp extras/com.job-agent.remove-server.example.plist ~/Library/LaunchAgents/com.job-agent.remove-server.plist
+launchctl load ~/Library/LaunchAgents/com.job-agent.remove-server.plist
+```
+
+Hidden URLs are stored in `~/.job-agent/digest_ignore_links.json` (merged with `digest_ignore_links` in config).
+
 Put `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_TO` in `.env` in the repo (or `~/.job-agent/.env`).
 
 ## Install LaunchAgent (every 30 min)

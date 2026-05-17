@@ -12,7 +12,21 @@ import pandas as pd
 from job_agent import db
 from job_agent.digest_guard import record_send, should_skip_send
 from job_agent.contacts import _build_contact_queries, find_contacts
+from job_agent.digest_remove import (
+    digest_remove_enabled,
+    ensure_remove_server_running,
+    run_remove_server_forever,
+)
 from job_agent.excel_email import save_excel, send_digest_email
+from job_agent.job_tracker_excel import (
+    allowed_status_values,
+    apply_tracker_to_digest_df,
+    create_empty_job_tracker,
+    default_job_tracker_path,
+    job_tracker_enabled,
+    sync_digest_jobs_to_tracker,
+    update_job_status,
+)
 from job_agent.network import (
     connections_for_job,
     enrich_jobs_dataframe_with_network,
@@ -20,6 +34,12 @@ from job_agent.network import (
     normalize_company,
     read_connections_csv,
     resolve_network_csv_path,
+)
+from job_agent.ignore_store import (
+    build_removed_jobs_dataframe,
+    load_removed_records,
+    merge_ignore_links,
+    removed_records_to_jobs,
 )
 from job_agent.util import normalize_url
 from job_agent.filters import annotate_search_fallback_for_blocked_domains, apply_job_filters
@@ -36,6 +56,7 @@ from job_agent.browser.paths import resolve_browser_user_data_dir
 from job_agent.sources.google_browser import fetch_google_web_browser, google_login
 from job_agent.sources.linkedin_browser import (
     build_linkedin_jobs_search_url,
+    enrich_removed_records,
     enrich_reach_out_for_jobs,
     fetch_linkedin_jobs,
     linkedin_login,
@@ -73,6 +94,8 @@ def _digest_subject(cfg: Dict[str, Any], slot: str) -> str | None:
         return "DevOps leadership jobs — afternoon digest (Israel)"
     if slot == "digest":
         return "DevOps leadership jobs — digest (Israel)"
+    if slot == "removed":
+        return "DevOps leadership jobs — removed (restore)"
     return None
 
 
@@ -89,6 +112,7 @@ def _collect_and_filter_jobs(
     if jobs:
         jobs = apply_job_filters(jobs, cfg)
         annotate_search_fallback_for_blocked_domains(jobs, cfg)
+    jobs = _apply_digest_ignore(jobs, cfg)
     location_dropped = max(0, raw_job_count - after_location_count)
     return jobs, fetch_stats_df, raw_job_count, location_dropped
 
@@ -109,13 +133,8 @@ def _digest_only_new(cfg: Dict[str, Any]) -> bool:
 
 
 def _apply_digest_ignore(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
-    raw_links = cfg.get("digest_ignore_links")
+    ignore_links = merge_ignore_links(cfg)
     raw_cos = cfg.get("digest_ignore_companies")
-    ignore_links = {
-        normalize_url(str(x).strip())
-        for x in (raw_links if isinstance(raw_links, list) else [])
-        if str(x).strip()
-    }
     ignore_cos = {
         normalize_company(str(x))
         for x in (raw_cos if isinstance(raw_cos, list) else [])
@@ -164,49 +183,6 @@ def _jobs_for_scheduled_digest(conn: Any, cfg: Dict[str, Any]) -> List[Job]:
     return _finalize_jobs_for_digest(jobs, cfg)
 
 
-def _build_digest_note(
-    *,
-    email_count: int,
-    fetched_after_filters: int,
-    stored_new: int,
-    pending_before_send: int,
-    location_dropped: int,
-    fetch_stats_df: pd.DataFrame,
-    only_new: bool,
-) -> str:
-    if only_new:
-        parts = [
-            f"This email lists {email_count} new job(s) not sent in an earlier digest.",
-        ]
-    else:
-        parts = [
-            f"This email lists {email_count} job(s) from your current search (including listings you have seen before).",
-        ]
-    parts.append(
-        f"This run kept {fetched_after_filters} job(s) after the Israel location filter"
-        if fetched_after_filters
-        else f"The digest includes {email_count} stored job(s) after filters"
-    )
-    if location_dropped > 0:
-        parts[-1] += f" ({location_dropped} dropped for missing Israel/IL signals — often US/EU Greenhouse rows)"
-    parts[-1] += "."
-    if stored_new:
-        parts.append(f"{stored_new} new URL(s) were added to jobs.db this run.")
-    if only_new and pending_before_send > email_count:
-        parts.append(
-            f"{pending_before_send - email_count} pending row(s) were skipped for this send "
-            "(location filter on email or empty after filters)."
-        )
-    if not only_new and not fetch_stats_df.empty and "Fetched" in fetch_stats_df.columns:
-        total_raw = int(pd.to_numeric(fetch_stats_df["Fetched"], errors="coerce").fillna(0).sum())
-        if total_raw > email_count:
-            parts.append(
-                f"Source fetch totals ({total_raw} rows) are before filters; "
-                "the table lists all stored matches, not only new URLs."
-            )
-    return " ".join(parts)
-
-
 def _send_email_for_jobs(
     *,
     email_jobs: List[Job],
@@ -217,25 +193,32 @@ def _send_email_for_jobs(
     fetch_stats_df: pd.DataFrame,
     digest_note: str,
     subject: str | None,
+    table_action: str = "remove",
+    jobs_df: pd.DataFrame | None = None,
 ) -> int:
     if not email_jobs:
         print("No jobs to email.")
         return 0
 
     slot = (getattr(args, "digest_slot", None) or "").strip()
+    if table_action == "restore":
+        slot = slot or "removed"
     if not args.dry_run:
         skip, reason = should_skip_send(cfg, slot=slot)
         if skip:
             print(reason)
             return 0
 
-    if not args.dry_run and not args.skip_network and uses_browser_search(cfg):
+    if table_action != "restore" and not args.dry_run and not args.skip_network and uses_browser_search(cfg):
         enrich_reach_out_for_jobs(email_jobs, cfg, for_email=True)
         if conn is not None:
             db.upsert_jobs(conn, email_jobs, mark_emailed=False)
 
-    rows = [j.as_row() for j in email_jobs]
-    df = pd.DataFrame(rows)
+    if jobs_df is not None and not jobs_df.empty:
+        df = jobs_df.copy()
+    else:
+        rows = [j.as_row() for j in email_jobs]
+        df = pd.DataFrame(rows)
     by_src: Dict[str, int] = {}
     for j in email_jobs:
         by_src[j.source] = by_src.get(j.source, 0) + 1
@@ -286,6 +269,20 @@ def _send_email_for_jobs(
     else:
         df["Network"] = ""
 
+    if table_action != "restore" and job_tracker_enabled(cfg):
+        sync_digest_jobs_to_tracker(df, cfg, root=root)
+        df = apply_tracker_to_digest_df(df, cfg, root=root)
+
+    removed_df = pd.DataFrame()
+    if table_action != "restore" and digest_remove_enabled(cfg) and cfg.get(
+        "digest_email_include_removed_table", True
+    ):
+        records = load_removed_records(cfg)
+        if records:
+            records = enrich_removed_records(records, cfg)
+            removed_df = build_removed_jobs_dataframe(records)
+            print(f"Including {len(removed_df)} removed job(s) after main table.", file=sys.stderr)
+
     attach_excel = bool(cfg.get("email_attach_excel", False))
     contacts_for_out = contacts_df if not contacts_df.empty else pd.DataFrame()
     xlsx_path = None
@@ -296,8 +293,22 @@ def _send_email_for_jobs(
         print(f"Dry-run: would email {len(email_jobs)} job(s).")
         return 0
 
-    db.mark_emailed(conn, [j.link for j in email_jobs])
-    record_send(cfg, slot=slot, job_count=len(email_jobs))
+    if digest_remove_enabled(cfg) and table_action == "remove":
+        if ensure_remove_server_running(cfg):
+            print(
+                "Digest action links enabled (Remove / Did U apply? → Yes).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Warning: digest server is not running — Remove / Apply links will not work. "
+                "Run: python3 run.py --digest-remove-server",
+                file=sys.stderr,
+            )
+
+    if table_action != "restore":
+        db.mark_emailed(conn, [j.link for j in email_jobs])
+    record_send(cfg, slot=slot or table_action, job_count=len(email_jobs))
     send_digest_email(
         df,
         contacts_for_out,
@@ -309,9 +320,50 @@ def _send_email_for_jobs(
         attach_excel=attach_excel,
         excel_path=xlsx_path,
         subject=subject,
+        table_action=table_action if table_action in ("remove", "restore") else "remove",
+        removed_jobs_df=removed_df,
     )
     print(f"Sent digest email ({len(email_jobs)} jobs).")
     return 0
+
+
+def _send_removed_jobs_email(
+    *,
+    cfg: Dict[str, Any],
+    root: Path,
+    args: argparse.Namespace,
+    conn: Any,
+) -> int:
+    records = load_removed_records(cfg)
+    if not records:
+        print("No removed jobs in your hide list.")
+        return 0
+    records = enrich_removed_records(records, cfg)
+    email_jobs = removed_records_to_jobs(records)
+    df = build_removed_jobs_dataframe(records)
+    note = f"{len(records)} hidden job(s). Click Restore in a row to bring it back."
+    if digest_remove_enabled(cfg):
+        if ensure_remove_server_running(cfg):
+            print("Restore links enabled in removed-jobs email.", file=sys.stderr)
+        else:
+            print(
+                "Warning: remove/restore server not running — Restore links will not work. "
+                "Run: python3 run.py --digest-remove-server",
+                file=sys.stderr,
+            )
+    subject = _digest_subject(cfg, "removed")
+    return _send_email_for_jobs(
+        email_jobs=email_jobs,
+        cfg=cfg,
+        root=root,
+        args=args,
+        conn=conn,
+        fetch_stats_df=pd.DataFrame(),
+        digest_note=note,
+        subject=subject,
+        table_action="restore",
+        jobs_df=df,
+    )
 
 
 def _strip_disabled_serpapi_sources(cfg: Dict[str, Any], only: Set[str]) -> Set[str] | None:
@@ -629,10 +681,15 @@ def run(argv: List[str] | None = None) -> int:
         help="Email jobs stored with emailed_at unset (no fetch). Used by scheduled morning/afternoon slots.",
     )
     parser.add_argument(
+        "--send-removed-email",
+        action="store_true",
+        help="Email all jobs you removed (hide list) with a Restore column instead of Remove.",
+    )
+    parser.add_argument(
         "--digest-slot",
-        choices=("morning", "afternoon", "digest"),
+        choices=("morning", "afternoon", "digest", "removed"),
         default="",
-        help="Email subject label for scheduled digests (with --send-pending-email).",
+        help="Email subject label for scheduled digests (with --send-pending-email or --send-removed-email).",
     )
     parser.add_argument(
         "--print-queries",
@@ -644,9 +701,59 @@ def run(argv: List[str] | None = None) -> int:
         action="store_true",
         help="Log each SerpAPI Google Jobs / site:ATS request (full q) to stderr only; does not change which queries run or job results. Same as serpapi_log_each_query: true in config.",
     )
+    parser.add_argument(
+        "--digest-remove-server",
+        action="store_true",
+        help="Run local HTTP server for «Remove → Yes» links in digest emails (install LaunchAgent for always-on).",
+    )
+    parser.add_argument(
+        "--init-job-tracker",
+        action="store_true",
+        help="Create empty job_tracker.xlsx (digest columns + Apply Date, Status).",
+    )
+    parser.add_argument(
+        "--job-tracker-overwrite",
+        action="store_true",
+        help="Replace existing job tracker workbook when used with --init-job-tracker.",
+    )
+    parser.add_argument(
+        "--set-job-status",
+        nargs=2,
+        metavar=("LINK", "STATUS"),
+        help='Update Status in job_tracker.xlsx (e.g. "Interview", "Rejected").',
+    )
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+    cfg = {**cfg, "_project_root": str(root)}
+    if getattr(args, "set_job_status", None):
+        link, status = args.set_job_status
+        if not job_tracker_enabled(cfg):
+            print("job_tracker is disabled in config.", file=sys.stderr)
+            return 1
+        try:
+            from job_agent.job_tracker_excel import set_job_tracker_status
+
+            canonical = set_job_tracker_status(link, status, cfg, root=root)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            print(f"Allowed: {', '.join(allowed_status_values(cfg))}", file=sys.stderr)
+            return 1
+        print(f"Updated status for {link!r} → {canonical!r}")
+        print(f"Allowed values: {', '.join(allowed_status_values(cfg))}")
+        return 0
+    if args.init_job_tracker:
+        path = default_job_tracker_path(root, cfg)
+        try:
+            out = create_empty_job_tracker(path, cfg, overwrite=bool(args.job_tracker_overwrite))
+        except FileExistsError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Created job tracker: {out}")
+        return 0
+    if args.digest_remove_server:
+        run_remove_server_forever(cfg)
+        return 0
     if args.log_serpapi_queries:
         cfg = {**cfg, "serpapi_log_each_query": True}
     if args.allow_non_israel_email:
@@ -695,12 +802,18 @@ def run(argv: List[str] | None = None) -> int:
     if args.fetch_only and args.send_pending_email:
         print("Use either --fetch-only or --send-pending-email, not both.", file=sys.stderr)
         return 2
+    if args.send_pending_email and args.send_removed_email:
+        print("Use either --send-pending-email or --send-removed-email, not both.", file=sys.stderr)
+        return 2
 
     conn = db.connect(args.db)
     try:
         slot = (args.digest_slot or "").strip()
         subject = _digest_subject(cfg, slot) if slot else None
         empty_stats = pd.DataFrame()
+
+        if args.send_removed_email:
+            return _send_removed_jobs_email(cfg=cfg, root=root, args=args, conn=conn)
 
         if args.send_pending_email:
             email_jobs = _jobs_for_scheduled_digest(conn, cfg)
@@ -729,7 +842,7 @@ def run(argv: List[str] | None = None) -> int:
                 args=args,
                 conn=conn,
                 fetch_stats_df=empty_stats,
-                digest_note=note,
+                digest_note="",
                 subject=subject,
             )
 
@@ -771,15 +884,6 @@ def run(argv: List[str] | None = None) -> int:
                 print("No jobs to email after filters.")
             return 0
 
-        note = _build_digest_note(
-            email_count=len(email_jobs),
-            fetched_after_filters=len(jobs),
-            stored_new=stored_new,
-            pending_before_send=pending_count,
-            location_dropped=location_dropped,
-            fetch_stats_df=fetch_stats_df,
-            only_new=only_new,
-        )
         return _send_email_for_jobs(
             email_jobs=email_jobs,
             cfg=cfg,
@@ -787,7 +891,7 @@ def run(argv: List[str] | None = None) -> int:
             args=args,
             conn=conn,
             fetch_stats_df=fetch_stats_df,
-            digest_note=note,
+            digest_note="",
             subject=subject,
         )
     finally:

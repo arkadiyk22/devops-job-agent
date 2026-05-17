@@ -28,6 +28,14 @@ _SUFFIX_RE = re.compile(
     r"\b(inc\.?|llc\.?|ltd\.?|limited|corp\.?|corporation|plc|gmbh|bv|s\.a\.|s\.p\.a\.)\.?\s*$",
     re.I,
 )
+_PROFILE_PHOTO_SUFFIX_RE = re.compile(r"\s*profile\s*photo\s*$", re.I)
+_VIEW_PROFILE_ARIA_RE = re.compile(
+    r"^(?:view\s+)?(.+?)(?:'s|'s|’s)\s+profile\s*$",
+    re.I,
+)
+
+# Tag stored on Job.raw when scrape came from «People you can reach out to» (not hiring team).
+REACH_OUT_LINKEDIN_SOURCE = "people_you_can_reach_out_to"
 
 
 def normalize_company(name: str) -> str:
@@ -83,6 +91,12 @@ def read_connections_csv(path: Path) -> List[Dict[str, str]]:
             row = {str(k): str(v) if v is not None else "" for k, v in raw.items()}
             first = _cell_ci(row, "First Name", "FirstName", "Given Name")
             last = _cell_ci(row, "Last Name", "LastName", "Family Name")
+            if not first and not last:
+                full = _cell_ci(row, "Full Name", "Name", "Contact Name")
+                if full:
+                    parts = full.split(None, 1)
+                    first = parts[0]
+                    last = parts[1] if len(parts) > 1 else ""
             url = _cell_ci(row, "URL", "Profile URL", "LinkedIn URL")
             company = _cell_ci(row, "Company", "Organization", "Company Name")
             position = _cell_ci(row, "Position", "Title", "Headline", "Job Title")
@@ -91,7 +105,9 @@ def read_connections_csv(path: Path) -> List[Dict[str, str]]:
             low = url.lower()
             if "linkedin.com/in/" not in low and "lnkd.in/" not in low:
                 continue
-            name = f"{first} {last}".strip() or url
+            name = person_display_name(
+                {"first_name": first, "last_name": last, "name": f"{first} {last}".strip()}
+            ) or url
             out.append(
                 {
                     "first_name": first,
@@ -126,9 +142,57 @@ def connections_for_job(job: Job, connections: List[Dict[str, str]]) -> List[Dic
     return out
 
 
+def person_display_name(p: Dict[str, str]) -> str:
+    """Best-effort full name for Network column (Connections.csv or LinkedIn scrape)."""
+    first = (p.get("first_name") or "").strip()
+    last = (p.get("last_name") or "").strip()
+    if first and last:
+        return f"{first} {last}".strip()
+    raw = (p.get("name") or "").strip()
+    if not raw:
+        return ""
+    raw = _PROFILE_PHOTO_SUFFIX_RE.sub("", raw).strip()
+    m = _VIEW_PROFILE_ARIA_RE.match(raw)
+    if m:
+        raw = m.group(1).strip()
+    # Drop degree suffix: "Jane Doe · 1st" -> "Jane Doe"
+    if "·" in raw:
+        head = raw.split("·", 1)[0].strip()
+        if head:
+            raw = head
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw
+
+
+def reach_out_people_have_full_names(people: List[Dict[str, str]]) -> bool:
+    """True if at least one scraped row has a multi-word or first+last name."""
+    for p in people:
+        if not isinstance(p, dict):
+            continue
+        if (p.get("last_name") or "").strip():
+            return True
+        name = person_display_name(p)
+        if name and len(name.split()) >= 2:
+            return True
+    return False
+
+
+def linkedin_reach_out_snapshot_ok(raw: Dict[str, Any]) -> bool:
+    """Cached scrape is from the reach-out block and includes usable full names."""
+    if not isinstance(raw, dict):
+        return False
+    if raw.get("reach_out_source") != REACH_OUT_LINKEDIN_SOURCE:
+        return False
+    scraped = raw.get("reach_out_people")
+    if not isinstance(scraped, list) or not scraped:
+        return False
+    rows = [x for x in scraped if isinstance(x, dict)]
+    return bool(rows) and reach_out_people_have_full_names(rows)
+
+
 def format_reach_out_person(p: Dict[str, str]) -> str:
-    """Format one LinkedIn «People you can reach out to» row."""
-    name = (p.get("name") or "").strip()
+    """Format one LinkedIn «People you can reach out to» row (full name + role)."""
+    name = person_display_name(p)
     role = (p.get("role") or "").strip()
     if name and role:
         return f"{name} ({role})"
@@ -166,8 +230,8 @@ def network_column_for_job(
 
 
 def format_connection_short(c: Dict[str, str]) -> str:
-    """One line for the Network column: ``Name (Role)``."""
-    name = (c.get("name") or "").strip()
+    """One line for the Network column: ``Full name (Role)``."""
+    name = person_display_name(c)
     role = (c.get("position") or "").strip()
     if name and role:
         return f"{name} ({role})"

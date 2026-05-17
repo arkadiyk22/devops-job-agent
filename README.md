@@ -117,6 +117,21 @@ There is **no** sample-mail flag; use **`--dry-run`** to inspect stderr tables w
 | `--sources a,b,c` | `serpapi`, `google_site_ats`, `greenhouse`, `lever`, `rss` (SerpAPI CLI names are ignored unless the matching `serpapi_features.*` is true) |
 | `--config path` | Alternate `config.json` |
 | `--db path` | Alternate SQLite file |
+| `--digest-remove-server` | Run local HTTP server for **Remove → Yes** links in digest emails (port 8791; see `extras/README.md`) |
+
+### Hide jobs from future digests
+
+Digest emails include a **Remove** column with **Yes** only — click to hide a job. Hidden jobs are saved in `~/.job-agent/digest_ignore_links.json` (with title/company when available).
+
+To review hidden jobs and bring them back:
+
+```bash
+python3 run.py --send-removed-email
+```
+
+That email uses the same table with a **Restore** column instead of Remove.
+
+Keep `python3 run.py --digest-remove-server` running (or install the LaunchAgent in `extras/`).
 
 ## CV
 

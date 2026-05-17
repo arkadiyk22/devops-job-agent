@@ -2,9 +2,13 @@
 
 from job_agent.models import Job
 from job_agent.network import (
+    REACH_OUT_LINKEDIN_SOURCE,
     companies_match,
     enrich_jobs_dataframe_with_network,
+    format_reach_out_person,
+    linkedin_reach_out_snapshot_ok,
     network_column_text,
+    person_display_name,
     read_connections_csv,
 )
 import pandas as pd
@@ -43,6 +47,37 @@ def test_network_column_text():
     text = network_column_text(job, conns, max_people=8)
     assert "Alice Cohen" in text and "VP Engineering" in text
     assert "Bob Levy" in text
+
+
+def test_person_display_name_prefers_first_last():
+    assert person_display_name({"first_name": "Jane", "last_name": "Doe"}) == "Jane Doe"
+    assert person_display_name({"name": "View Jane Doe's profile"}) == "Jane Doe"
+    assert person_display_name({"name": "Bob · 1st"}) == "Bob"
+
+
+def test_format_reach_out_person_full_name():
+    text = format_reach_out_person({"name": "Alice", "first_name": "Alice", "last_name": "Cohen", "role": "VP"})
+    assert text == "Alice Cohen (VP)"
+
+
+def test_linkedin_reach_out_snapshot_ok_requires_source_and_full_name():
+    assert not linkedin_reach_out_snapshot_ok(
+        {"reach_out_people": [{"name": "Bob", "first_name": "Bob"}], "reach_out_source": "other"}
+    )
+    assert not linkedin_reach_out_snapshot_ok(
+        {
+            "reach_out_people": [{"name": "Bob", "first_name": "Bob"}],
+            "reach_out_source": REACH_OUT_LINKEDIN_SOURCE,
+        }
+    )
+    assert linkedin_reach_out_snapshot_ok(
+        {
+            "reach_out_people": [
+                {"name": "Alice Cohen", "first_name": "Alice", "last_name": "Cohen", "role": "VP"}
+            ],
+            "reach_out_source": REACH_OUT_LINKEDIN_SOURCE,
+        }
+    )
 
 
 def test_read_connections_csv_minimal():

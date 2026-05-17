@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the digest «Remove → Yes» link handler running (port 8791 by default).
+
+  Install:
+    cp extras/com.job-agent.remove-server.example.plist ~/Library/LaunchAgents/com.job-agent.remove-server.plist
+    launchctl load ~/Library/LaunchAgents/com.job-agent.remove-server.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.job-agent.remove-server</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>/Users/arkadiykats/devops-job-agent</string>
+  <key>StandardOutPath</key>
+  <string>/Users/arkadiykats/.job-agent/logs/remove-server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/arkadiykats/.job-agent/logs/remove-server.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/arkadiykats/devops-job-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>/Users/arkadiykats</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/arkadiykats/devops-job-agent/.venv/bin/python3</string>
+    <string>/Users/arkadiykats/devops-job-agent/run.py</string>
+    <string>--digest-remove-server</string>
+  </array>
+</dict>
+</plist>

@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from job_agent.linkedin_og import (
+    hiring_signal_in_text,
+    is_linkedin_post_url,
+    matches_leadership_role_focus,
+)
 from job_agent.models import Job
 
 _DEFAULT_CLOSED = (
@@ -195,6 +200,33 @@ def _effective_keep_unknown_posted_age(job: Job, cfg: Dict[str, Any]) -> bool:
     return False
 
 
+def _linkedin_posts_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    block = cfg.get("linkedin_posts")
+    return block if isinstance(block, dict) else {}
+
+
+def filter_linkedin_post_jobs(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
+    """Drop LinkedIn feed posts that are not hiring announcements or DevOps leadership roles."""
+    block = _linkedin_posts_block(cfg)
+    if not block.get("enabled", True):
+        return jobs
+    require_hiring = bool(block.get("require_hiring_signal", True))
+    require_role = bool(block.get("filter_by_role_focus", True))
+
+    out: List[Job] = []
+    for j in jobs:
+        if not is_linkedin_post_url(j.link):
+            out.append(j)
+            continue
+        blob = job_text_for_filters(j)
+        if require_hiring and not hiring_signal_in_text(blob):
+            continue
+        if require_role and not matches_leadership_role_focus(blob, cfg):
+            continue
+        out.append(j)
+    return out
+
+
 def apply_job_filters(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
     """Drop closed postings and optionally enforce max posting age."""
     max_days = int(cfg.get("max_posted_age_days") or 0)
@@ -208,4 +240,4 @@ def apply_job_filters(jobs: List[Job], cfg: Dict[str, Any]) -> List[Job]:
         if not posted_within_max_days(j.posted, max_days, keep_unknown=ku):
             continue
         out.append(j)
-    return out
+    return filter_linkedin_post_jobs(out, cfg)

@@ -7,6 +7,11 @@
     "slow_mo_ms": 0,
     "locale": "he-IL"
   },
+  "linkedin_posts": {
+    "enabled": true,
+    "require_hiring_signal": true,
+    "filter_by_role_focus": true
+  },
   "linkedin": {
     "enabled": true,
     "jobs_search": {
@@ -31,7 +36,7 @@
   "rss_feeds_israel_host_substrings": [".co.il", "alljobs", "drushim", "jobnet"],
   "google_web_browser": {
     "enabled": true,
-    "max_queries_per_run": 4,
+    "max_queries_per_run": 6,
     "results_per_query": 12,
     "pause_seconds": 3,
     "search_url": "https://www.google.co.il/search",
@@ -45,7 +50,9 @@
       "site:il.linkedin.com/jobs (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
       "site:linkedin.com/jobs/view (\"devops manager\" OR \"devops director\" OR \"מנהל devops\") Israel{after}",
       "site:job-boards.greenhouse.io Israel (\"devops manager\" OR \"head of devops\" OR \"platform engineering manager\"){after}",
-      "site:apply.workable.com \"Israel\" (\"devops manager\" OR \"devops director\" OR \"head of devops\"){after}"
+      "site:apply.workable.com \"Israel\" (\"devops manager\" OR \"devops director\" OR \"head of devops\"){after}",
+      "site:linkedin.com/posts (\"hiring\" OR \"we're hiring\" OR \"now hiring\" OR \"open role\") (\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"platform engineering manager\" OR \"sre manager\" OR \"מנהל devops\") Israel{after}",
+      "site:linkedin.com/posts (\"מגייס\" OR \"מגייסים\" OR \"משרה פנויה\") (\"devops\" OR \"מנהל devops\" OR \"מנהל תשתיות\" OR \"פלטפורמה\") Israel{after}"
     ],
     "role_phrases": [
       "(\"devops manager\" OR \"devops director\" OR \"head of devops\" OR \"vp devops\" OR \"platform engineering manager\" OR \"sre manager\")"
@@ -90,6 +97,13 @@
   "digest_min_minutes_between_sends": 90,
   "digest_ignore_links": [],
   "digest_ignore_companies": [],
+  "digest_remove": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8791,
+    "base_url": "http://127.0.0.1:8791",
+    "ignore_store_path": "~/.job-agent/digest_ignore_links.json"
+  },
   "schedule": {
     "poll_interval_minutes": 30,
     "morning_email": "09:30",
@@ -100,13 +114,30 @@
   "digest_email_subjects": {
     "morning": "DevOps leadership jobs — morning digest (Israel)",
     "afternoon": "DevOps leadership jobs — afternoon digest (Israel)",
-    "digest": "DevOps leadership jobs — digest (Israel)"
+    "digest": "DevOps leadership jobs — digest (Israel)",
+    "removed": "DevOps leadership jobs — removed (click Restore)"
   },
+  "digest_email_include_removed_table": true,
   "digest_email_enforce_location_hint": true,
   "max_posted_age_days": 30,
   "keep_unknown_posted_age": true,
   "email_from_display_name": "Job Agent",
   "email_attach_excel": false,
+  "job_tracker": {
+    "enabled": true,
+    "path": "job_tracker.xlsx",
+    "sheet_name": "Jobs in this digest",
+    "apply_links_enabled": true,
+    "status_default_new": "New",
+    "status_default_on_apply": "In Progress",
+    "status_links_enabled": true,
+    "status_values": [
+      "New",
+      "In Progress",
+      "Interview",
+      "Rejected"
+    ]
+  },
   "email_table_headers": {
     "Link": "Job link / URL"
   },
